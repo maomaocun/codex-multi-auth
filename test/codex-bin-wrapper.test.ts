@@ -5240,7 +5240,7 @@ describe("codex bin wrapper", () => {
 			"const args = process.argv.slice(2);",
 			'if (args[0] === "app-server") process.exit(0);',
 			"console.log(`PROVIDER_OPENAI:${args.includes('model_provider=\\\"openai\\\"')}`);",
-			"console.log(`OPENAI_PROXY_OVERRIDE:${args.some((arg) => arg.includes('model_providers.openai.base_url='))}`);",
+			"console.log(`OPENAI_PROXY_OVERRIDE:${args.some((arg) => arg.includes('openai_base_url='))}`);",
 			"process.exit(0);",
 		]);
 		const originalHome = join(fixtureRoot, "codex-home");
