@@ -171,6 +171,12 @@ for the diagnostic view. The Chinese detailed view localizes runtime,
 subscription, forecast, workspace, and API/ZDR labels as well as the quota
 bars. JSON output remains stable and machine-readable.
 
+The local dashboard is available with `codex-multi-auth web` (or `codex-ma
+web`). It uses the same account and quota state as `status --json`, updates
+through a server-sent event stream, opens a browser by default, and listens on
+`127.0.0.1:4317`. Use `--no-open` for headless machines. A non-loopback bind
+must include an access token.
+
 ## Runtime rotation proxy
 
 `codexRuntimeRotationProxy` is enabled by default. When enabled through defaults, settings, `codex-multi-auth rotation enable`, or `CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY=1`, the `codex-multi-auth-codex` wrapper starts a localhost-only Responses proxy for forwarded official Codex sessions, including CLI request commands, `codex app-server`, and `codex app` launches through the wrapper. For non-interactive request commands and `codex app`, the wrapper writes a temporary shadow `CODEX_HOME/config.toml` that selects a custom provider named `codex-multi-auth-runtime-proxy`, launches the official Codex surface against that provider, and removes the shadow home after the owning process exits. Interactive TUI sessions (with or without the optional initial prompt), `resume`/`fork`, and `codex app-server` instead stay on the canonical `CODEX_HOME` and receive the same provider through `-c` overrides, which avoids reindexing session history on every launch and leaves the real `config.toml` untouched. Set `codexRuntimeRotationProxy=false`, run `codex-multi-auth rotation disable`, or set `CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY=0` to bypass the proxy.

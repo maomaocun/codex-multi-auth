@@ -93,7 +93,9 @@ import { runRotationCommand } from "./codex-manager/commands/rotation.js";
 import {
 	runFeaturesCommand,
 	runStatusCommand,
+	type StatusCommandDeps,
 } from "./codex-manager/commands/status.js";
+import { runWebCommand } from "./web-dashboard.js";
 import { loadPersistedRuntimeObservabilitySnapshot } from "./runtime/runtime-observability.js";
 import { runSwitchCommand } from "./codex-manager/commands/switch.js";
 import { runHistoryCommand } from "./codex-manager/commands/history.js";
@@ -245,6 +247,7 @@ const IMPLEMENTED_FEATURES: ImplementedFeature[] = [
 	{ id: 52, name: "Why-selected and monitor diagnostics" },
 	{ id: 53, name: "Config explain, init-config templates, and debug bundle" },
 	{ id: 54, name: "mcodex convenience launcher (monitor/tmux/forward)" },
+	{ id: 55, name: "Local real-time web pool dashboard" },
 ];
 
 async function runForecast(args: string[]): Promise<number> {
@@ -396,8 +399,9 @@ type CliCommandHandler = (rest: string[]) => number | Promise<number>;
 /**
  * Shared handler for `list` and `status` (aliases of the same view).
  */
-const runListOrStatusCommand: CliCommandHandler = (rest) =>
-	runStatusCommand({
+
+function buildStatusCommandDeps(rest: string[], logInfo?: (message: string) => void): StatusCommandDeps {
+	return {
 		loadApiRoutes,
 		loadResetCreditState,
 		loadInferenceRequestTimes,
@@ -424,7 +428,25 @@ const runListOrStatusCommand: CliCommandHandler = (rest) =>
 		json: rest.includes("--json") || rest.includes("-j"),
 		compact: !rest.includes("--details") && !rest.includes("--verbose") && !rest.includes("--json") && !rest.includes("-j"),
 		locale: resolveOutputLocale(loadPluginConfig().locale),
-	});
+		...(logInfo ? { logInfo } : {}),
+	};
+}
+
+const runListOrStatusCommand: CliCommandHandler = (rest) =>
+	runStatusCommand(buildStatusCommandDeps(rest));
+
+async function loadStatusJsonSnapshot(): Promise<Record<string, unknown>> {
+	let serialized = "";
+	const exitCode = await runStatusCommand(buildStatusCommandDeps(["--json"], (message) => {
+		serialized = message;
+	}));
+	if (exitCode !== 0) throw new Error("Unable to load status snapshot.");
+	const parsed: unknown = JSON.parse(serialized);
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error("Status snapshot is not an object.");
+	}
+	return parsed as Record<string, unknown>;
+}
 
 /**
  * Command registry for the `auth` dispatcher (audit roadmap §4.1.1 phase 2).
@@ -444,6 +466,7 @@ const CLI_COMMAND_HANDLERS: ReadonlyMap<string, CliCommandHandler> = new Map<
 	["login", (rest) => runAuthLogin(rest, { runForecast, createRepairCommandDeps })],
 	["list", runListOrStatusCommand],
 	["status", runListOrStatusCommand],
+	["web", (rest) => runWebCommand(rest, { getStatus: loadStatusJsonSnapshot })],
 	[
 		"limits",
 		(rest) =>

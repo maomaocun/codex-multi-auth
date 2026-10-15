@@ -2036,7 +2036,7 @@ describe("codex manager cli commands", () => {
 		const exitCode = await runCodexMultiAuthCli(["auth", "features"]);
 		expect(exitCode).toBe(0);
 		expect(errorSpy).not.toHaveBeenCalled();
-		expect(logSpy.mock.calls[0]?.[0]).toBe("Implemented features (54)");
+		expect(logSpy.mock.calls[0]?.[0]).toBe("Implemented features (55)");
 		expect(
 			logSpy.mock.calls.some((call) =>
 				String(call[0]).includes("41. Auto-switch to best account command"),
