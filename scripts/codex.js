@@ -86,6 +86,8 @@ const APP_RUNTIME_HELPER_USE_CANONICAL_HOME_ENV =
 	"CODEX_MULTI_AUTH_APP_ROTATION_USE_CANONICAL_HOME";
 const APP_RUNTIME_HELPER_INSTALL_APP_SERVER_SHIM_ENV =
 	"CODEX_MULTI_AUTH_APP_ROTATION_INSTALL_APP_SERVER_SHIM";
+const APP_RUNTIME_HELPER_PROVIDER_ID_ENV =
+	"CODEX_MULTI_AUTH_APP_ROTATION_PROVIDER_ID";
 const RUNTIME_ROTATION_PROXY_UPSTREAM_BASE_URL_ENV =
 	"CODEX_MULTI_AUTH_RUNTIME_PROXY_UPSTREAM_BASE_URL";
 const APP_SERVER_CONFIG_ARGS_ENV =
@@ -4264,11 +4266,12 @@ function createRuntimeRotationProxyCanonicalCodexHome(
 	proxyBaseUrl,
 	clientApiKey,
 	configTomlModule,
+	providerId = RUNTIME_ROTATION_PROXY_PROVIDER_ID,
 ) {
 	const originalCodexHome = resolveRuntimeRotationProxyOriginalCodexHome(baseEnv);
-	const providerTable = `model_providers.${RUNTIME_ROTATION_PROXY_PROVIDER_ID}`;
+	const providerTable = `model_providers.${providerId}`;
 	const configArgs = [
-		`${providerTable}.name=${configTomlModule.tomlStringLiteral(APP_SERVER_ACCOUNT_DISPLAY_NAME)}`,
+		`${providerTable}.name=${configTomlModule.tomlStringLiteral(providerId === "openai" ? "openai" : APP_SERVER_ACCOUNT_DISPLAY_NAME)}`,
 		`${providerTable}.base_url=${configTomlModule.tomlStringLiteral(proxyBaseUrl)}`,
 		`${providerTable}.env_key=${configTomlModule.tomlStringLiteral("OPENAI_API_KEY")}`,
 		`${providerTable}.requires_openai_auth=false`,
@@ -5192,6 +5195,7 @@ async function runRuntimeRotationAppHelper(identityToken = "") {
 					proxyServer.baseUrl,
 					clientApiKey,
 					configTomlModule,
+					process.env[APP_RUNTIME_HELPER_PROVIDER_ID_ENV] ?? RUNTIME_ROTATION_PROXY_PROVIDER_ID,
 				)
 			: createRuntimeRotationProxyCodexHome(
 					process.env,
@@ -5211,11 +5215,12 @@ async function runRuntimeRotationAppHelper(identityToken = "") {
 			(process.env[APP_RUNTIME_HELPER_INSTALL_APP_SERVER_SHIM_ENV] ?? "1").trim() !==
 			"0";
 		if (installAppServerShim) {
+			const providerId = process.env[APP_RUNTIME_HELPER_PROVIDER_ID_ENV] ?? RUNTIME_ROTATION_PROXY_PROVIDER_ID;
 			const appServerConfigArgs = useCanonicalHome
 				? [
 						...(runtimeContext.args ?? []),
 						"-c",
-						`model_provider=${configTomlModule.tomlStringLiteral(RUNTIME_ROTATION_PROXY_PROVIDER_ID)}`,
+						`model_provider=${configTomlModule.tomlStringLiteral(providerId)}`,
 					]
 				: [];
 			appServerShimDir = installRuntimeRotationAppServerCliShim(
@@ -5402,6 +5407,8 @@ function startRuntimeRotationAppHelper(baseContext, options = {}) {
 				options.useCanonicalHome === true ? "1" : "0",
 			[APP_RUNTIME_HELPER_INSTALL_APP_SERVER_SHIM_ENV]:
 				options.installAppServerShim === false ? "0" : "1",
+			[APP_RUNTIME_HELPER_PROVIDER_ID_ENV]:
+				options.providerId ?? RUNTIME_ROTATION_PROXY_PROVIDER_ID,
 		};
 		const helper = spawn(
 			process.execPath,
@@ -5546,10 +5553,11 @@ async function createRuntimeRotationAppHelperContext(
 		}
 	};
 
+	const providerId = options.providerId ?? RUNTIME_ROTATION_PROXY_PROVIDER_ID;
 	const injectedArgs = [
 		...helperArgs,
 		"-c",
-		`model_provider=${configTomlModule.tomlStringLiteral(RUNTIME_ROTATION_PROXY_PROVIDER_ID)}`,
+		`model_provider=${configTomlModule.tomlStringLiteral(providerId)}`,
 	];
 	return {
 		// Root TUI argv can end in the optional `[PROMPT]` positional, and `--`
@@ -5684,9 +5692,11 @@ async function createRuntimeRotationProxyContextIfEnabled(
 	// answer is needed twice below.
 	const isRootTuiLaunch = isCodexInteractiveTuiCommand(rawArgs);
 	if (isRootTuiLaunch || isCodexInteractiveResumeCommand(rawArgs)) {
+		const resumeProvider = resolveResumeSessionProvider(rawArgs, baseContext.env);
 		return startAppHelperContext({
 			detachOnExit: true,
 			useCanonicalHome: true,
+			providerId: resumeProvider === "openai" ? "openai" : RUNTIME_ROTATION_PROXY_PROVIDER_ID,
 			// Root TUI launches may carry the optional `[PROMPT]` positional
 			// (possibly forced by `--`); the provider overrides must stay on the
 			// option side of it. `resume`/`fork` keep the appended ordering their
@@ -6094,6 +6104,64 @@ function isCodexInteractiveTuiCommand(rawArgs) {
 function isCodexInteractiveResumeCommand(rawArgs) {
 	const command = findForwardedCommand(rawArgs)?.command;
 	return command === "resume" || command === "fork";
+}
+
+// Codex filters the resume catalog by the active model provider. Keep an
+// existing native `openai` rollout visible by using the local proxy under the
+// same provider name for this invocation. This only changes the transport
+// endpoint; account selection still happens inside the rotation proxy.
+function resolveResumeSessionProvider(rawArgs, env = process.env) {
+	const command = findForwardedCommand(rawArgs);
+	if (command?.command !== "resume") return null;
+	let requestedId = null;
+	let useLast = false;
+	for (let index = command.index + 1; index < rawArgs.length; index += 1) {
+		const arg = rawArgs[index];
+		if (arg === "--") break;
+		if (arg === "--last") { useLast = true; continue; }
+		if (arg === "--help" || arg === "-h") return null;
+		if (consumesNextArg(arg)) {
+			index += 1;
+			continue;
+		}
+		if (typeof arg === "string" && arg.startsWith("-")) continue;
+		if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(arg)) return null;
+		requestedId = arg;
+		break;
+	}
+	if (!requestedId && !useLast) return null;
+	const sessionsRoot = join(resolveCodexHomeDir(env), "sessions");
+	const targetSuffix = requestedId ? `-${requestedId}.jsonl`.toLowerCase() : null;
+	const findRollout = (directory, latest = null) => {
+			let entries;
+			try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return null; }
+			for (const entry of entries) {
+				const path = join(directory, entry.name);
+				if (entry.isDirectory()) {
+					const found = findRollout(path, latest);
+					if (found && (!latest || !latest.path || found.mtimeMs > latest.mtimeMs)) latest = found;
+				} else if (entry.isFile() && (!targetSuffix || entry.name.toLowerCase().endsWith(targetSuffix))) {
+					let mtimeMs = 0;
+					try { mtimeMs = statSync(path).mtimeMs; } catch { /* partial rollout */ }
+					if (!latest || mtimeMs > latest.mtimeMs) latest = { path, mtimeMs };
+				}
+			}
+			return latest;
+		};
+		const rollout = findRollout(sessionsRoot);
+		if (!rollout) return null;
+		try {
+			for (const line of readFileSync(rollout.path, "utf8").split(/\r?\n/).slice(0, 12)) {
+				if (!line.trim()) continue;
+				const record = JSON.parse(line);
+				if (record?.type === "session_meta" && typeof record.payload?.model_provider === "string") {
+					return record.payload.model_provider;
+				}
+			}
+		} catch {
+			return null;
+		}
+		return null;
 }
 
 function shouldUseRuntimeRoutingForForwardedArgs(rawArgs) {

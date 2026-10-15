@@ -34,6 +34,7 @@ import {
 } from "../../runtime/runtime-current-account.js";
 import { isRateLimitedMarker } from "../rate-limit-markers.js";
 import type { RuntimeObservabilitySnapshot } from "../../runtime/runtime-observability.js";
+import { localized, resolveOutputLocale, type OutputLocale } from "../../locale.js";
 import type { AccountStorageV3, StorageHealthSummary } from "../../storage.js";
 
 type LoadedStorage = AccountStorageV3 | null;
@@ -66,6 +67,9 @@ export interface StatusCommandDeps {
 	logInfo?: (message: string) => void;
 	/** When true, emit a single machine-readable JSON object instead of text (cli-manager-03). */
 	json?: boolean;
+	/** Compact human-facing summary. Undefined keeps the legacy detailed view for API callers. */
+	compact?: boolean;
+	locale?: OutputLocale;
 }
 
 function isRestoreReason(value: unknown): value is RestoreReason {
@@ -158,17 +162,18 @@ export async function runStatusCommand(
 	const path = deps.getStoragePath();
 	const storageHealth = await deps.inspectStorageHealth?.();
 	const logInfo = deps.logInfo ?? console.log;
-    if (apiConfigurationUnavailable && !deps.json) logInfo("API configuration unavailable; subscription status remains available.");
+	const locale = deps.locale ?? resolveOutputLocale(loadPluginConfig().locale);
+    if (apiConfigurationUnavailable && !deps.json && !deps.compact) logInfo("API configuration unavailable; subscription status remains available.");
 
 	const modelInventory = await deps.loadModelInventory?.();
 	const appBindStatus = await deps.loadAppBindStatus?.() ?? null;
 	const disconnectLine = formatWebsocketDisconnect(appBindStatus?.lastWebsocketDisconnect);
-	if (!deps.json && disconnectLine) logInfo(paint(disconnectLine, "warning"));
+	if (!deps.json && !deps.compact && disconnectLine) logInfo(paint(disconnectLine, "warning"));
  const resetCredits = await deps.loadResetCreditState?.().catch(()=>null);
  const resetSnapshot = (account: AccountStorageV3["accounts"][number]) => {const target=resetTargetForStoredAccount(account);return target?resetCredits?.snapshots[target.key]:undefined;};
 	let policiesUnavailable = false;
 	const accountPolicies: Awaited<ReturnType<typeof loadAccountPolicyStore>> = await (deps.loadAccountPolicies ?? loadAccountPolicyStore)({strict:true}).catch(() => { policiesUnavailable = true; return {version:1 as const,accounts:{}}; });
-	if (!deps.json && deps.loadModelInventory) for (const line of formatModelInventory(modelInventory ?? null)) logInfo(line);
+	if (!deps.json && !deps.compact && deps.loadModelInventory) for (const line of formatModelInventory(modelInventory ?? null)) logInfo(line);
 	if (!storage || (storage.accounts.length === 0 && apiRoutes.length === 0)) {
 		const restoreReason = storage ? readRestoreReason(storage) : undefined;
 		const effectiveState: StorageHealthSummary["state"] | undefined =
@@ -204,6 +209,13 @@ export async function runStatusCommand(
 					2,
 				),
 			);
+			return 0;
+		}
+		if (deps.compact) {
+			logInfo(localized(locale, "Codex Multi-Auth status", "Codex Multi-Auth 状态"));
+			logInfo(localized(locale, "Accounts: 0 total", "账号：共 0 个"));
+			logInfo(`${localized(locale, "Storage", "存储")}: ${path}`);
+			if (effectiveState) logInfo(`${localized(locale, "Storage health", "存储健康")}: ${effectiveState}`);
 			return 0;
 		}
 		logInfo(
@@ -248,7 +260,7 @@ export async function runStatusCommand(
 		})),
 	);
 	const recommendation = recommendForecastAccount(forecastResults);
-	if (!deps.json) {
+	if (!deps.json && !deps.compact) {
 		logInfo(paint(apiRoutes.length ? `Accounts (${storage.accounts.length + apiRoutes.length}: ${storage.accounts.length} subscription, ${apiRoutes.length} API/ZDR)` : `Accounts (${storage.accounts.length})`, "heading"));
 		logInfo(paint(`Storage: ${path}`, "muted"));
 		if (recommendation.recommendedIndex !== null) {
@@ -311,6 +323,67 @@ export async function runStatusCommand(
 		},
 		{ now },
 	);
+
+	if (!deps.json && deps.compact) {
+		const compactRows = storage.accounts.map((account, index) => {
+			const markers = buildAccountMarkers(account, index, activeIndex, runtimeCurrent, now, quotaCache, storage.accounts, deps.formatRateLimitEntry);
+			const needsLogin = markers.some((marker) => /(re-login|sign-in|invalid)/i.test(marker));
+			const disabled = account.enabled === false;
+			const state = disabled
+				? localized(locale, "disabled", "已禁用")
+				: needsLogin
+					? localized(locale, "needs login", "需重新登录")
+					: markers.length > 0
+						? markers
+							.map((marker) => marker === "current" ? localized(locale, "current", "当前") : marker === "in-use" ? localized(locale, "in use", "使用中") : marker)
+							.join(", ")
+						: localized(locale, "ready", "可用");
+			const subscription = subscriptionStatuses[index];
+			const plan = subscription?.planLabel === "Unknown plan"
+				? localized(locale, "unknown", "未知")
+				: subscription?.planLabel ?? localized(locale, "unknown", "未知");
+			const quota = forecastQuotas[index];
+			const quotaText = quota
+				? (["primary", "secondary"] as const)
+						.map((key) => {
+							const used = quota[key].usedPercent;
+							return typeof used === "number" && Number.isFinite(used)
+								? `${key === "primary" ? "5h" : "7d"} ${Math.max(0, Math.min(100, Math.round(100 - used)))}%`
+								: null;
+						})
+						.filter(Boolean)
+						.join(" / ") || "?"
+				: "?";
+			const last = inferenceTimes[inferenceAccountKey(account)];
+			const activity = typeof last === "number" && last > 0 ? formatWaitTime(Math.max(0, now - last)) : "—";
+			return { index: index + 1, plan, state, quota: quotaText, activity };
+		});
+		const needsLoginCount = compactRows.filter((row) => /login|登录/.test(row.state)).length;
+		const disabledCount = compactRows.filter((row) => /disabled|禁用/.test(row.state)).length;
+		const readyCount = compactRows.length - needsLoginCount - disabledCount;
+		const route = typeof storage.pinnedAccountIndex === "number"
+			? localized(locale, `pinned to account ${storage.pinnedAccountIndex + 1}`, `固定到账号 ${storage.pinnedAccountIndex + 1}`)
+			: localized(locale, `automatic (active account ${activeIndex + 1})`, `自动轮换（当前账号 ${activeIndex + 1}）`);
+		logInfo(localized(locale, "Codex Multi-Auth status", "Codex Multi-Auth 状态"));
+		logInfo(`${localized(locale, "Accounts", "账号")}: ${readyCount} ${localized(locale, "ready", "可用")} / ${needsLoginCount} ${localized(locale, "need login", "需登录")} / ${disabledCount} ${localized(locale, "disabled", "已禁用")} (${compactRows.length} ${localized(locale, "total", "总计")})`);
+		logInfo(`${localized(locale, "Routing", "路由")}: ${route}; ${localized(locale, "recommended", "推荐")} ${recommendation.recommendedIndex === null ? "—" : `#${recommendation.recommendedIndex + 1}`}`);
+		if (runtimeSnapshot) {
+			const metrics = runtimeSnapshot.runtimeMetrics;
+			logInfo(`${localized(locale, "Runtime", "运行时")}: ${runtimeSnapshot.responsesRequests} ${localized(locale, "requests", "请求")}, ${metrics.successfulRequests} ${localized(locale, "ok", "成功")}, ${metrics.failedRequests} ${localized(locale, "failed", "失败")}`);
+		}
+		logInfo("");
+		logInfo(localized(locale, "#  Plan       Quota          State             Last request", "#  套餐       配额            状态              最近请求"));
+		for (const row of compactRows) {
+			logInfo(`${row.index}  ${row.plan.padEnd(10)} ${row.quota.padEnd(14)} ${row.state.padEnd(17)} ${row.activity}`);
+		}
+		if (needsLoginCount > 0) {
+			logInfo("");
+			logInfo(localized(locale, "Action: codex-multi-auth login --account <index>", "操作：codex-multi-auth login --account <序号>"));
+		}
+		logInfo(`${localized(locale, "Storage", "存储")}: ${path}`);
+		logInfo(localized(locale, "Use --details for the full diagnostic view; --json is stable machine-readable output.", "使用 --details 查看完整诊断；--json 输出稳定的机器可读格式。"));
+		return 0;
+	}
 
 	// cli-manager-03: machine-readable output for status/list. Build a single
 	// object from the same data the text path renders, then emit and return.

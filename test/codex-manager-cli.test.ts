@@ -1058,7 +1058,7 @@ describe("codex manager cli commands", () => {
 		const logSpy = silenceConsole("log");
 		const { runCodexMultiAuthCli } = await import("../lib/codex-manager.js");
 
-		const exitCode = await runCodexMultiAuthCli(["auth", "list"]);
+		const exitCode = await runCodexMultiAuthCli(["auth", "list", "--details"]);
 
 		expect(exitCode).toBe(0);
 		expect(logSpy).toHaveBeenCalledWith(
@@ -1086,7 +1086,7 @@ describe("codex manager cli commands", () => {
 		const logSpy = silenceConsole("log");
 		const { runCodexMultiAuthCli } = await import("../lib/codex-manager.js");
 
-		const exitCode = await runCodexMultiAuthCli(["auth", "list"]);
+		const exitCode = await runCodexMultiAuthCli(["auth", "list", "--details"]);
 
 		expect(exitCode).toBe(0);
 		expect(logSpy).toHaveBeenCalledWith(
@@ -1476,7 +1476,7 @@ describe("codex manager cli commands", () => {
 		const logSpy = silenceConsole("log");
 		const { runCodexMultiAuthCli } = await import("../lib/codex-manager.js");
 
-		const exitCode = await runCodexMultiAuthCli(["auth", "status"]);
+		const exitCode = await runCodexMultiAuthCli(["auth", "status", "--details"]);
 
 		expect(exitCode).toBe(0);
 		expect(storageMocks.setStoragePath).toHaveBeenCalledWith(null);

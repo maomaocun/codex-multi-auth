@@ -97,7 +97,9 @@ import {
 import { loadPersistedRuntimeObservabilitySnapshot } from "./runtime/runtime-observability.js";
 import { runSwitchCommand } from "./codex-manager/commands/switch.js";
 import { runHistoryCommand } from "./codex-manager/commands/history.js";
+import { runLocaleCommand } from "./codex-manager/commands/locale.js";
 import { runUnpinCommand } from "./codex-manager/commands/unpin.js";
+import { resolveOutputLocale } from "./locale.js";
 import { runWorkspaceCommand } from "./codex-manager/commands/workspace.js";
 import { runUsageCommand } from "./codex-manager/commands/usage.js";
 import { refreshQuotaCacheForMenu } from "./codex-manager/login-menu-data.js";
@@ -420,6 +422,8 @@ const runListOrStatusCommand: CliCommandHandler = (rest) =>
 		loadAppHelperStatus: readAppRuntimeHelperAccountSignal,
 		loadQuotaCache,
 		json: rest.includes("--json") || rest.includes("-j"),
+		compact: !rest.includes("--details") && !rest.includes("--verbose") && !rest.includes("--json") && !rest.includes("-j"),
+		locale: resolveOutputLocale(loadPluginConfig().locale),
 	});
 
 /**
@@ -628,6 +632,12 @@ const CLI_COMMAND_HANDLERS: ReadonlyMap<string, CliCommandHandler> = new Map<
 			if (subcommand === "template") {
 				return runInitConfigCommand(configArgs);
 			}
+			if (subcommand === "locale") {
+				return runLocaleCommand(configArgs, {
+					loadConfig: () => loadPluginConfig(),
+					saveConfig: savePluginConfig,
+				});
+			}
 			console.error(`Unknown config command: ${subcommand ?? "(missing)"}`);
 			return 1;
 		},
@@ -654,6 +664,19 @@ const CLI_COMMAND_HANDLERS: ReadonlyMap<string, CliCommandHandler> = new Map<
 ]);
 
 export async function runCodexMultiAuthCli(rawArgs: string[]): Promise<number> {
+	const localeArgs = [...rawArgs];
+	for (let i = 0; i < localeArgs.length; i += 1) {
+		const arg = localeArgs[i];
+		if (arg === "--locale" && localeArgs[i + 1]) {
+			process.env.CODEX_MULTI_AUTH_LOCALE = localeArgs[i + 1];
+			localeArgs.splice(i, 2);
+			i -= 1;
+		} else if (typeof arg === "string" && arg.startsWith("--locale=")) {
+			process.env.CODEX_MULTI_AUTH_LOCALE = arg.slice("--locale=".length);
+			localeArgs.splice(i, 1);
+			i -= 1;
+		}
+	}
 	// Lazy install setup (audit roadmap §4.5.4): app detection, Codex app bind,
 	// and launcher routing moved out of npm postinstall to the first CLI run.
 	// ensureFirstRunSetup never throws; the catch is belt-and-braces so no
@@ -665,9 +688,9 @@ export async function runCodexMultiAuthCli(rawArgs: string[]): Promise<number> {
 	applyUiThemeFromDashboardSettings(startupDisplaySettings);
 
 	const args =
-		rawArgs[0] && rawArgs[0] !== "auth" && ACCOUNT_MANAGER_COMMANDS.has(rawArgs[0])
-			? ["auth", ...rawArgs]
-			: [...rawArgs];
+		localeArgs[0] && localeArgs[0] !== "auth" && ACCOUNT_MANAGER_COMMANDS.has(localeArgs[0])
+			? ["auth", ...localeArgs]
+			: [...localeArgs];
 	if (args.length === 0) {
 		printUsage();
 		return 0;

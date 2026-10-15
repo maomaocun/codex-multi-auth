@@ -113,6 +113,18 @@ function createRuntimeSnapshot(
 }
 
 describe("runStatusCommand", () => {
+	it("prints a compact actionable summary without account emails", async () => {
+		const logInfo = vi.fn();
+		const deps = createStatusDeps({ compact: true, locale: "zh", logInfo });
+		await runStatusCommand(deps);
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("Codex Multi-Auth 状态");
+		expect(output).toContain("账号");
+		expect(output).toContain("可用");
+		expect(output).not.toContain("one@example.com");
+		expect(output).toContain("--details");
+	});
+
 	it("separates saved workspace selection from the last outgoing request scope", async () => {
 		const storage = createStorage();
 		storage.accounts[0]!.accountId = "stored-org";
@@ -781,7 +793,7 @@ it.each([
    expect(payload.selectionMode).toBe(live ? "model-priority" : "legacy-pin");
    expect(payload.accounts[0].automaticOrder).toBe(live ? 1 : null);
    log.mockClear();
-   expect(await runCodexMultiAuthCli(["status"])).toBe(0);
+   expect(await runCodexMultiAuthCli(["status", "--details"])).toBe(0);
    const output = log.mock.calls.flat().join("\n");
    expect(output).toContain("1970-01-01T00:00:01.000Z");
    expect(output).toContain("streaming");

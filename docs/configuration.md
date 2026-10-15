@@ -149,9 +149,35 @@ codex-multi-auth rotation status         # runtime proxy state
 
 ---
 
+## Output language
+
+Human-facing CLI output follows the system locale by default. The first
+non-empty value among `LC_ALL`, `LC_MESSAGES`, and `LANG` selects Chinese for
+`zh_*` locales; all other values select English. JSON output remains stable and
+is not translated.
+
+Override one invocation with `--locale en` or `--locale zh`, or persist the
+choice:
+
+```bash
+codex-multi-auth config locale auto
+codex-multi-auth config locale en
+codex-multi-auth config locale zh
+```
+
+`CODEX_MULTI_AUTH_LOCALE=auto|en|zh` has precedence for a process. `status`
+prints a compact summary by default; add `--details` for the diagnostic view.
+
 ## Runtime rotation proxy
 
 `codexRuntimeRotationProxy` is enabled by default. When enabled through defaults, settings, `codex-multi-auth rotation enable`, or `CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY=1`, the `codex-multi-auth-codex` wrapper starts a localhost-only Responses proxy for forwarded official Codex sessions, including CLI request commands, `codex app-server`, and `codex app` launches through the wrapper. For non-interactive request commands and `codex app`, the wrapper writes a temporary shadow `CODEX_HOME/config.toml` that selects a custom provider named `codex-multi-auth-runtime-proxy`, launches the official Codex surface against that provider, and removes the shadow home after the owning process exits. Interactive TUI sessions (with or without the optional initial prompt), `resume`/`fork`, and `codex app-server` instead stay on the canonical `CODEX_HOME` and receive the same provider through `-c` overrides, which avoids reindexing session history on every launch and leaves the real `config.toml` untouched. Set `codexRuntimeRotationProxy=false`, run `codex-multi-auth rotation disable`, or set `CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY=0` to bypass the proxy.
+
+For `mcodex resume <id>` targeting a rollout recorded under native `openai`,
+the wrapper preserves the `openai` provider name for Codex's session lookup and
+temporarily points that provider at the local rotation proxy. The resumed
+request still uses the managed account pool, while the canonical session files
+and SQLite state remain shared. `resume --last` applies the same provider-aware
+selection.
 
 A single forwarded run can be pinned to one account with `codex-multi-auth-codex --account <selector>` (or `CODEX_MULTI_AUTH_FORCE_ACCOUNT`). The pin is applied per-invocation by that run's own proxy instance, so it never touches the persisted `switch` pin and cannot leak across concurrent sessions. Because the proxy is required for the pin to take effect, `--account` fails hard when the proxy is disabled rather than silently using a rotated account. See [Force an account for one invocation](reference/commands.md#force-an-account-for-one-invocation).
 

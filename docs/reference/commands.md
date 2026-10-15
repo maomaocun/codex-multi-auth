@@ -48,7 +48,7 @@ per-project pools are a runtime-proxy routing concern, not a CLI one.
 | --- | --- |
 | `codex-multi-auth login` | OAuth login; opens the interactive auth dashboard on a TTY when the pool is populated. Flags: `--device-auth`, `--manual`/`--no-browser`, `--org <org_id>`, `--preserve-selection`, `--account <index\|email\|account_id>` |
 | `codex-multi-auth login --api` | Manage API/ZDR credentials, priority, and visible models in an interactive terminal (TTY only; use alone) |
-| `codex-multi-auth status` | Account pool, pin, runtime metrics, storage summary, cached model discovery; `list` is the same command (`--json`) |
+| `codex-multi-auth status` | Human-friendly account summary, routing, runtime metrics, and quota; `list` is the same command. Use `--details` for the full diagnostic view or `--json` for automation |
 | `codex-multi-auth switch <index>` | Set the active account by 1-based index and pin it for runtime routing |
 | `codex-multi-auth unpin` | Clear the manual pin set by `switch` and resume hybrid rotation |
 | `codex-multi-auth workspace <account> [workspace]` | List an account's tracked workspaces, or set its active workspace |
@@ -76,6 +76,7 @@ per-project pools are a runtime-proxy routing concern, not a CLI one.
 | `codex-multi-auth why-selected` | Explain the rotation selector's pick: `--now`/`-n` (default) or `--last`/`-l`, `--json`; exit 1 when nothing is selectable |
 | `codex-multi-auth debug bundle` | Sanitized runtime/debug snapshot: `--json` |
 | `codex-multi-auth history` | List local Codex sessions across all providers, bypassing `model_provider` filtering: `history [list\|show <id>] [--json]` |
+| `codex-multi-auth config locale` | Show or set output language: `config locale [auto\|en\|zh]`; `auto` follows `LC_ALL`, `LC_MESSAGES`, or `LANG` |
 
 ### Local governance
 
@@ -765,6 +766,12 @@ codex-multi-auth history show <session-id> [--json]
 cwd, most-recent first; `show <id>` prints provider/originator metadata and the
 first few user messages. Reopen any session with `codex resume <id>`.
 Read-only, no network calls, never mutates state.
+
+`mcodex resume <id>` also accepts a session created by the normal `codex`
+provider. The wrapper keeps the canonical `openai` provider name for Codex's
+session lookup, then temporarily points that provider at the local rotation
+proxy so the resumed request still uses the managed account pool. The session
+files and SQLite state remain under the canonical `CODEX_HOME`.
 
 ---
 
