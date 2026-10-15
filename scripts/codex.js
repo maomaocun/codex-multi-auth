@@ -4269,16 +4269,30 @@ function createRuntimeRotationProxyCanonicalCodexHome(
 	providerId = RUNTIME_ROTATION_PROXY_PROVIDER_ID,
 ) {
 	const originalCodexHome = resolveRuntimeRotationProxyOriginalCodexHome(baseEnv);
-	const providerTable = `model_providers.${providerId}`;
-	const configArgs = [
-		`${providerTable}.name=${configTomlModule.tomlStringLiteral(providerId === "openai" ? "openai" : APP_SERVER_ACCOUNT_DISPLAY_NAME)}`,
-		`${providerTable}.base_url=${configTomlModule.tomlStringLiteral(proxyBaseUrl)}`,
-		`${providerTable}.env_key=${configTomlModule.tomlStringLiteral("OPENAI_API_KEY")}`,
-		`${providerTable}.requires_openai_auth=false`,
-		`${providerTable}.http_headers.x-openai-actor-authorization=${configTomlModule.tomlStringLiteral("codex-multi-auth-local")}`,
-		`${providerTable}.wire_api=${configTomlModule.tomlStringLiteral("responses")}`,
-		"disable_response_storage=false",
-	].flatMap((assignment) => ["-c", assignment]);
+	// Codex reserves the built-in `openai` provider ID and rejects a
+	// `[model_providers.openai]` table before the TUI can load a session. The
+	// built-in provider has a dedicated top-level base URL setting, so use that
+	// for native OpenAI rollouts and keep `model_provider=openai` for resume
+	// catalog compatibility. Custom provider IDs still use the normal provider
+	// table because they are not reserved by Codex.
+	const configAssignments = providerId === "openai"
+		? [
+				`openai_base_url=${configTomlModule.tomlStringLiteral(proxyBaseUrl)}`,
+				"disable_response_storage=false",
+			]
+		: (() => {
+				const providerTable = `model_providers.${providerId}`;
+				return [
+					`${providerTable}.name=${configTomlModule.tomlStringLiteral(APP_SERVER_ACCOUNT_DISPLAY_NAME)}`,
+					`${providerTable}.base_url=${configTomlModule.tomlStringLiteral(proxyBaseUrl)}`,
+					`${providerTable}.env_key=${configTomlModule.tomlStringLiteral("OPENAI_API_KEY")}`,
+					`${providerTable}.requires_openai_auth=false`,
+					`${providerTable}.http_headers.x-openai-actor-authorization=${configTomlModule.tomlStringLiteral("codex-multi-auth-local")}`,
+					`${providerTable}.wire_api=${configTomlModule.tomlStringLiteral("responses")}`,
+					"disable_response_storage=false",
+				];
+			})();
+	const configArgs = configAssignments.flatMap((assignment) => ["-c", assignment]);
 
 	return {
 		args: configArgs,

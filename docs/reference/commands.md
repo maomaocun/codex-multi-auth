@@ -48,7 +48,7 @@ per-project pools are a runtime-proxy routing concern, not a CLI one.
 | --- | --- |
 | `codex-multi-auth login` | OAuth login; opens the interactive auth dashboard on a TTY when the pool is populated. Flags: `--device-auth`, `--manual`/`--no-browser`, `--org <org_id>`, `--preserve-selection`, `--account <index\|email\|account_id>` |
 | `codex-multi-auth login --api` | Manage API/ZDR credentials, priority, and visible models in an interactive terminal (TTY only; use alone) |
-| `codex-multi-auth status` | Human-friendly account summary, routing, runtime metrics, and quota; `list` is the same command. Use `--details` for the full diagnostic view or `--json` for automation |
+| `codex-multi-auth status` | Human-friendly account summary, routing, runtime metrics, and quota bars showing used/remaining percentages; `list` is the same command. Use `--details` for the full diagnostic view or `--json` for automation |
 | `codex-multi-auth switch <index>` | Set the active account by 1-based index and pin it for runtime routing |
 | `codex-multi-auth unpin` | Clear the manual pin set by `switch` and resume hybrid rotation |
 | `codex-multi-auth workspace <account> [workspace]` | List an account's tracked workspaces, or set its active workspace |
@@ -771,9 +771,11 @@ Read-only, no network calls, never mutates state.
 
 `mcodex resume <id>` also accepts a session created by the normal `codex`
 provider. The wrapper keeps the canonical `openai` provider name for Codex's
-session lookup, then temporarily points that provider at the local rotation
-proxy so the resumed request still uses the managed account pool. The session
-files and SQLite state remain under the canonical `CODEX_HOME`.
+session lookup, then temporarily points that built-in provider at the local
+rotation proxy through `openai_base_url` so the resumed request still uses the
+managed account pool. It avoids writing `[model_providers.openai]`, which newer
+Codex versions reject as a reserved provider ID. The session files and SQLite
+state remain under the canonical `CODEX_HOME`.
 
 ---
 

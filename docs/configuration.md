@@ -166,7 +166,10 @@ codex-multi-auth config locale zh
 ```
 
 `CODEX_MULTI_AUTH_LOCALE=auto|en|zh` has precedence for a process. `status`
-prints a compact summary by default; add `--details` for the diagnostic view.
+prints a compact summary with quota progress bars by default; add `--details`
+for the diagnostic view. The Chinese detailed view localizes runtime,
+subscription, forecast, workspace, and API/ZDR labels as well as the quota
+bars. JSON output remains stable and machine-readable.
 
 ## Runtime rotation proxy
 
@@ -174,10 +177,12 @@ prints a compact summary by default; add `--details` for the diagnostic view.
 
 For `mcodex resume <id>` targeting a rollout recorded under native `openai`,
 the wrapper preserves the `openai` provider name for Codex's session lookup and
-temporarily points that provider at the local rotation proxy. The resumed
-request still uses the managed account pool, while the canonical session files
-and SQLite state remain shared. `resume --last` applies the same provider-aware
-selection.
+temporarily points the built-in provider at the local rotation proxy through
+Codex's top-level `openai_base_url` override. It does not create a
+`[model_providers.openai]` table, because recent Codex versions reserve that
+built-in provider ID. The resumed request still uses the managed account pool,
+while the canonical session files and SQLite state remain shared. `resume
+--last` applies the same provider-aware selection.
 
 A single forwarded run can be pinned to one account with `codex-multi-auth-codex --account <selector>` (or `CODEX_MULTI_AUTH_FORCE_ACCOUNT`). The pin is applied per-invocation by that run's own proxy instance, so it never touches the persisted `switch` pin and cannot leak across concurrent sessions. Because the proxy is required for the pin to take effect, `--account` fails hard when the proxy is disabled rather than silently using a rotated account. See [Force an account for one invocation](reference/commands.md#force-an-account-for-one-invocation).
 
