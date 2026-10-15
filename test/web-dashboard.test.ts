@@ -87,6 +87,18 @@ describe("web dashboard server", () => {
 		expect(await operation.json()).toMatchObject({ code: "ABCD-EFGH" });
 	});
 
+	it("serves monitor overview, health and CSV through the same token", async () => {
+		let started = 0; let stopped = 0;
+		const monitor = { start: () => { started += 1; }, stop: () => { stopped += 1; }, status: () => ({ ready: true, files: 2 }), report: () => ({ summary: { totalTokens: 3 }, models: [{ key: "gpt-6.1-sol", totalTokens: 3 }], sessions: [], meta: { ready: true } }) };
+		const handle = await startWebServer({ host: "127.0.0.1", port: 0, token: "monitor-token", getStatus: async () => ({}), monitor }); handles.push(handle);
+		const base = handle.url.split("?")[0]!; const auth = "?token=monitor-token";
+		expect(started).toBe(1);
+		expect(await (await fetch(base + "api/monitor/health" + auth)).json()).toMatchObject({ ready: true });
+		expect(await (await fetch(base + "api/monitor/overview" + auth)).json()).toMatchObject({ summary: { totalTokens: 3 } });
+		const csv = await fetch(base + "api/monitor/export.csv" + auth); expect(csv.status).toBe(200); expect(await csv.text()).toContain("gpt-6.1-sol");
+		await handle.close(); expect(stopped).toBe(1);
+	});
+
 	it("rejects cross-origin mutation, non-JSON bodies and unauthorized actions", async () => {
 		let called = false;
 		const handle = await startWebServer({
