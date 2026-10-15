@@ -34,6 +34,10 @@ export const DASHBOARD_CLIENT = String.raw`
     search: ['Search accounts, tags or notes', '搜索账号、标签或备注'], filter: ['Filter', '筛选'], all: ['All accounts', '全部账号'],
     noMatch: ['No matching accounts', '没有匹配的账号'], priorityShort: ['Priority', '优先级'], weightShort: ['Weight', '权重'],
     on: ['Enabled', '已开启'], off: ['Disabled', '已关闭'],
+    monitor: ['Codex usage monitor', 'Codex 用量监控'], exportCsv: ['Export CSV', '导出 CSV'], refreshMonitor: ['Refresh monitor', '刷新监控'],
+    trend: ['Usage trend', '用量趋势'], models: ['Model analysis', '模型分析'], sessions: ['Sessions and agents', '会话与 agents'],
+    today: ['Today', '今天'], sevenDays: ['Last 7 days', '最近 7 天'], thirtyDays: ['Last 30 days', '最近 30 天'], allHistory: ['All history', '全部历史'],
+    allModels: ['All models', '全部模型'], allTiers: ['All tiers', '全部档位'], allAgents: ['Root + child agents', '主 agent + 子 agent'], rootAgents: ['Root agents only', '仅主 agent'], childAgents: ['Child agents only', '仅子 agent'], dayTrend: ['Daily trend', '按日趋势'], hourTrend: ['Hourly trend', '按小时趋势'],
     foot: ['Local state updates every few seconds. Quota reflects the latest check or inference response.', '页面每隔数秒读取本机状态；配额来自最近一次检查或推理响应。'],
     loginHelp: ['Open the official page, enter the code and authorize one account. Use a private browser window to choose another account.', '打开官方登录页，输入设备码并授权一个账号。添加其他账号时可使用无痕窗口。'],
     code: ['Device code', '设备码'], waiting: ['Waiting for browser authorization (up to 15 minutes)…', '等待浏览器授权（最长约 15 分钟）…'],
@@ -69,7 +73,7 @@ export const DASHBOARD_CLIENT = String.raw`
   };
   const t = key => (copy[key] || copy.operation_failed)[lang === 'zh' ? 1 : 0];
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const api = path => path + '?token=' + encodeURIComponent(config.token);
+  const api = path => path + (path.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(config.token);
   async function request(path, payload) {
     let response;
     try { response = await fetch(api(path), payload ? {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(payload)} : {cache:'no-store'}); }
@@ -161,6 +165,10 @@ export const DASHBOARD_CLIENT = String.raw`
     $('updated').textContent=new Date().toLocaleTimeString(lang==='zh'?'zh-CN':'en');
   }
   async function load() { try {draw(await request('/api/status'));} catch(e) {failed(e);} }
+  function monitorQuery() { const p=new URLSearchParams({period:$('monitor-period').value,model:$('monitor-model').value,tier:$('monitor-tier').value,scope:$('monitor-scope').value,granularity:$('monitor-granularity').value}); return p.toString(); }
+  function monitorBar(row,max) { const pct=max?Math.min(100,row.totalTokens/max*100):0; return '<div class="trend-row"><span>'+esc(row.label||row.key||'—')+'</span><div class="bar"><div class="fill" style="width:'+pct+'%"></div></div><b>'+esc(formatTokens(row.totalTokens))+'</b></div>'; }
+  function formatTokens(n) { const value=Number(n||0); if(value>=1e9)return (value/1e9).toFixed(1)+'B'; if(value>=1e6)return (value/1e6).toFixed(1)+'M'; if(value>=1e3)return (value/1e3).toFixed(1)+'K'; return String(value); }
+  async function loadMonitor() { try { const report=await request('/api/monitor/overview?'+monitorQuery()); const s=report.summary||{}; const cards=[['totalTokens',lang==='zh'?'总 tokens':'Total tokens',formatTokens(s.totalTokens)],['inputTokens',lang==='zh'?'输入':'Input',formatTokens(s.inputTokens)],['outputTokens',lang==='zh'?'输出':'Output',formatTokens(s.outputTokens)],['cachedInputTokens',lang==='zh'?'缓存读取':'Cached',formatTokens(s.cachedInputTokens)],['responses',lang==='zh'?'请求':'Requests',s.responses||0],['costUsd',lang==='zh'?'估算费用':'Estimated cost','$'+Number(s.costUsd||0).toFixed(4)]]; $('monitor-summary').innerHTML=cards.map(c=>'<div class="card"><div class="label">'+c[1]+'</div><div class="value blue">'+c[2]+'</div></div>').join(''); const trend=report.trend||[],models=report.models||[],max=Math.max(1,...trend.map(x=>Number(x.totalTokens||0))); $('monitor-trend').innerHTML=trend.length?trend.slice(-45).map(x=>monitorBar(x,max)).join(''):'<div class="empty">'+t('unknown')+'</div>'; const modelMax=Math.max(1,...models.map(x=>Number(x.totalTokens||0))); $('monitor-models').innerHTML=models.length?models.slice(0,12).map(x=>monitorBar({label:x.key,totalTokens:x.totalTokens},modelMax)).join(''):'<div class="empty">'+t('unknown')+'</div>'; $('monitor-sessions').innerHTML=(report.sessions||[]).length?report.sessions.slice(0,20).map(x=>'<article class="account monitor-session"><div class="account-name">'+esc(x.title||x.id)+'</div><div class="account-meta">'+esc(x.id)+' · '+esc(x.childCount||0)+' '+t('sessions')+' · '+formatTokens(x.totalTokens)+' tokens</div></article>').join(''):'<div class="empty">'+t('unknown')+'</div>'; $('monitor-meta').textContent=(report.meta?.files||0)+' '+(lang==='zh'?'份日志':'log files')+' · '+(report.meta?.scanSeconds||0)+'s'; } catch(e) { $('monitor-trend').innerHTML='<div class="monitor-error">'+esc(t(e.message))+'</div>'; } }
   const dialog=$('manage-dialog');
   let submitAction=null;
   function modal(title, body, run, submitLabel) {
@@ -241,6 +249,8 @@ export const DASHBOARD_CLIENT = String.raw`
   $('search').addEventListener('input',()=>{if(data)draw(data)});
   $('filter').addEventListener('change',()=>{if(data)draw(data)});
   $('refresh').onclick=load;
+  ['monitor-period','monitor-model','monitor-tier','monitor-scope','monitor-granularity'].forEach(id=>$(id).addEventListener('change',loadMonitor));
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-monitor-action]');if(!b)return;if(b.dataset.monitorAction==='refresh')loadMonitor();if(b.dataset.monitorAction==='export')window.location.href=api('/api/monitor/export.csv?'+monitorQuery());});
   function setLang() {
     document.documentElement.lang=lang==='zh'?'zh-CN':'en';
     document.title='Codex Multi-Auth · '+t('title');
@@ -251,7 +261,7 @@ export const DASHBOARD_CLIENT = String.raw`
     if(data)draw(data);
   }
   $('lang').onclick=()=>{lang=lang==='zh'?'en':'zh';try{localStorage.setItem('cma.locale',lang)}catch(_){}setLang();};
-  setLang();void load();
+  setLang();void load();void loadMonitor();
   try {
     eventSource=new EventSource(api('/events'));
     eventSource.onopen=()=>{connected=true;$('connection').textContent=t('connected');$('dot').className='dot';};
