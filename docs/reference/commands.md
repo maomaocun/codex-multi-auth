@@ -40,7 +40,7 @@ per-project pools are a runtime-proxy routing concern, not a CLI one.
 
 ---
 
-## Subcommand inventory (31 commands)
+## Subcommand inventory (32 commands)
 
 ### Accounts and access
 
@@ -49,6 +49,7 @@ per-project pools are a runtime-proxy routing concern, not a CLI one.
 | `codex-multi-auth login` | OAuth login; opens the interactive auth dashboard on a TTY when the pool is populated. Flags: `--device-auth`, `--manual`/`--no-browser`, `--org <org_id>`, `--preserve-selection`, `--account <index\|email\|account_id>` |
 | `codex-multi-auth login --api` | Manage API/ZDR credentials, priority, and visible models in an interactive terminal (TTY only; use alone) |
 | `codex-multi-auth status` | Human-friendly account summary, routing, runtime metrics, and quota bars showing used/remaining percentages; `list` is the same command. Use `--details` for the full diagnostic view or `--json` for automation |
+| `codex-multi-auth web` | Start the local real-time pool dashboard and open it in a browser. Options: `--host`, `--port` (default `4317`), `--token`, `--interval` (milliseconds), `--no-open` |
 | `codex-multi-auth switch <index>` | Set the active account by 1-based index and pin it for runtime routing |
 | `codex-multi-auth unpin` | Clear the manual pin set by `switch` and resume hybrid rotation |
 | `codex-multi-auth workspace <account> [workspace]` | List an account's tracked workspaces, or set its active workspace |
@@ -128,6 +129,13 @@ All governance state is file-backed under `~/.codex/multi-auth`.
 | `--live` | best, forecast, report, fix | Use live probes before decisions/output. On `fix` this also rebinds an org-sourced account id the backend no longer authorizes and syncs a rebound active account into `~/.codex/auth.json` (see [the workspace note](#codex-multi-auth-workspace)) |
 | `--model <model>` | best, forecast, report, fix | Specify model for live probe paths |
 | `--no-runtime-overlay` | forecast | Score from stored account state only; skip the runtime observability overlay |
+
+`codex-multi-auth web` serves the same sanitized status JSON used by
+`status --json` through a local HTTP page and a server-sent event stream. It
+binds to `127.0.0.1` by default and refreshes every five seconds. Binding to a
+non-loopback host requires `--token` or `CODEX_MULTI_AUTH_WEB_TOKEN`; the token
+is checked on the page, JSON, and event-stream routes. `codex-ma web` is an
+equivalent short alias.
 | `--max-accounts <n>` | report | Cap how many accounts a live report walk inspects |
 | `--max-probes <n>` | report | Cap live probes during report |
 | `--cached-only` | report | Prefer cached quota/health data over live probes |

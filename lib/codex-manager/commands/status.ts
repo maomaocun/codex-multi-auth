@@ -390,6 +390,23 @@ export async function runStatusCommand(
 			if (effectiveState) logInfo(`${localized(locale, "Storage health", "存储健康")}: ${effectiveState}`);
 			return 0;
 		}
+		if (locale === "zh") {
+			if (apiConfigurationUnavailable) logInfo("警告：API 配置不可用；仍会显示订阅状态。");
+			if (deps.loadModelInventory) {
+				for (const line of formatModelInventoryZh(modelInventory ?? null)) logInfo(line);
+			}
+			const message = effectiveState === "intentional-reset"
+				? "未配置账号。存储已主动重置。"
+				: effectiveState === "recoverable"
+					? "未配置账号。存在可用的恢复文件。"
+					: effectiveState === "corrupt"
+						? "未配置账号。存储似乎已损坏。"
+						: "未配置账号。";
+			logInfo(message);
+			logInfo(`存储：${path}`);
+			if (effectiveState) logInfo(`存储健康：${formatStorageHealthZh(effectiveState)}`);
+			return 0;
+		}
 		logInfo(
 			effectiveState === "intentional-reset"
 				? "No accounts configured. Storage was intentionally reset."
@@ -586,6 +603,14 @@ export async function runStatusCommand(
 				forecastRiskScore: forecastResults[i]?.riskScore ?? null,
 				forecastRiskLevel: forecastResults[i]?.riskLevel ?? null,
 				forecastQuotaUpdatedAt: forecastQuotas[i]?.updatedAt ?? null,
+				quota: (() => {
+					const entry = forecastQuotas[i];
+					return entry ? {
+						updatedAt: entry.updatedAt,
+						primary: entry.primary,
+						secondary: entry.secondary,
+					} : null;
+				})(),
     automaticOrder: automaticOrder.get(i) ?? null,
     subscriptionReserve: usesSubscriptionReserve(quotaPreferences[i]),
     quotaResetAt: quotaPreferences[i]?.resetAtMs ?? null,
@@ -623,6 +648,13 @@ export async function runStatusCommand(
 						id: runtimeSnapshot.lastRequestedWorkspaceId,
 						accountIndex: runtimeSnapshot.lastAccountIndex ?? null,
 						requestedAt: runtimeSnapshot.lastAccountUpdatedAt ?? null,
+					} : null,
+					runtime: runtimeSnapshot ? {
+						responsesRequests: runtimeSnapshot.responsesRequests,
+						authRefreshRequests: runtimeSnapshot.authRefreshRequests,
+						diagnosticProbeRequests: runtimeSnapshot.diagnosticProbeRequests,
+						successfulRequests: runtimeSnapshot.runtimeMetrics.successfulRequests,
+						failedRequests: runtimeSnapshot.runtimeMetrics.failedRequests,
 					} : null,
 				},
 				null,

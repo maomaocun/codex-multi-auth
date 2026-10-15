@@ -201,6 +201,20 @@ describe("runStatusCommand", () => {
 		expect(deps.logInfo).toHaveBeenCalledWith("Storage health: healthy");
 	});
 
+	it("localizes empty detailed status output", async () => {
+		const logInfo = vi.fn();
+		await runStatusCommand(createStatusDeps({
+			locale: "zh",
+			logInfo,
+			loadAccounts: vi.fn(async () => null),
+		}));
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("未配置账号");
+		expect(output).toContain("存储健康：正常");
+		expect(output).not.toContain("No accounts configured");
+		expect(output).not.toContain("Storage health:");
+	});
+
 	it("prints intentional reset state from empty storage metadata", async () => {
 		const deps = createStatusDeps({
 			loadAccounts: vi.fn(async () => ({
