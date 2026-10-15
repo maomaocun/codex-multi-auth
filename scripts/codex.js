@@ -6251,7 +6251,16 @@ function shouldTrackForwardedRuntimeObservability(rawArgs) {
 }
 
 function shouldCaptureForwardedOutputForArgs(rawArgs, env) {
-	if (isCodexAppServerCommand(rawArgs)) {
+	// Codex's TUI and resume/fork commands require their child stdout to remain
+	// a terminal. Capturing them into a pipe (even when an explicit retry
+	// override is set) makes the official CLI abort with "stdout is not a
+	// terminal" before it can load the requested session. Interactive commands
+	// never use the wrapper's non-interactive unsupported-model retry parser.
+	if (
+		isCodexAppServerCommand(rawArgs) ||
+		isCodexInteractiveTuiCommand(rawArgs) ||
+		isCodexInteractiveResumeCommand(rawArgs)
+	) {
 		return false;
 	}
 	return shouldCaptureForwardedCodexOutput(env);

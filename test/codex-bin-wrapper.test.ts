@@ -7345,6 +7345,28 @@ describe("codex bin wrapper", () => {
 		expect(output).not.toContain("Retrying with");
 	});
 
+	it("keeps interactive resume stdout attached even when capture is forced", () => {
+		const fixtureRoot = createWrapperFixture();
+		const originalHome = join(fixtureRoot, "codex-home");
+		mkdirSync(originalHome, { recursive: true });
+		writeFileSync(join(originalHome, "config.toml"), "", "utf8");
+		const fakeBin = createCustomFakeCodexBin(fixtureRoot, [
+			"console.error(\"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.\");",
+			"process.exit(1);",
+		]);
+
+		const result = runWrapper(fixtureRoot, ["resume", "019ddf47-2c01-7c73-9f81-ab0cd9c1d5b7"], {
+			CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT: "1",
+			CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY: "0",
+			CODEX_MULTI_AUTH_REAL_CODEX_BIN: fakeBin,
+			CODEX_HOME: originalHome,
+		});
+
+		const output = combinedOutput(result);
+		expect(result.status).toBe(1);
+		expect(output).not.toContain("Retrying with");
+	});
+
 	it("retries GPT-5.6 Sol after access-denied style model errors", () => {
 		const fixtureRoot = createWrapperFixture();
 		const stateDir = join(fixtureRoot, "retry-state-access");
