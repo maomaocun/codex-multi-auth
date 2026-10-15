@@ -9,9 +9,7 @@ export function resolveOutputLocale(
 	env: NodeJS.ProcessEnv = process.env,
 ): OutputLocale {
 	const configured = requested?.trim().toLowerCase();
-	const value = ((configured && configured !== "auto")
-		? configured
-		: env.CODEX_MULTI_AUTH_LOCALE ?? configured ?? "auto")
+	const value = (env.CODEX_MULTI_AUTH_LOCALE?.trim() || configured || "auto")
 		.trim()
 		.toLowerCase();
 	if (value === "en" || value.startsWith("en-")) return "en";
