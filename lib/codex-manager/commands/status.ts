@@ -335,7 +335,7 @@ export async function runStatusCommand(
 					? localized(locale, "needs login", "需重新登录")
 					: markers.length > 0
 						? markers
-							.map((marker) => marker === "current" ? localized(locale, "current", "当前") : marker === "in-use" ? localized(locale, "in use", "使用中") : marker)
+							.map((marker) => marker === "current" ? localized(locale, "current", "当前") : marker === "selected" ? localized(locale, "selected", "已选中") : marker === "in-use" ? localized(locale, "in use", "使用中") : marker)
 							.join(", ")
 						: localized(locale, "ready", "可用");
 			const subscription = subscriptionStatuses[index];

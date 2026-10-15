@@ -121,6 +121,8 @@ All governance state is file-backed under `~/.codex/multi-auth`.
 | `--account <index\|email\|account_id>` | login | Re-authenticate exactly one saved account. Implies `--preserve-selection`, refuses a different OAuth identity before writing, keeps a disabled account disabled, and cannot be combined with `--org` |
 | `--api` | login | Open API credential and model visibility setup; use alone |
 | `--json` | limits, verify-flagged, verify, why-selected, best, forecast, report, usage, budget, models, monitor, integrations, fix, doctor, config explain, debug bundle, history | Print machine-readable output |
+| `--locale <auto\|en\|zh>` | human-facing manager commands | Select output language for this invocation; `auto` follows the system locale |
+| `--details` | status/list | Keep the detailed diagnostic view instead of the compact summary |
 | `--csv` | usage | Print or write CSV bucket output |
 | `--explain` | forecast, report | Include reasoning details (forecast text/JSON, report text) |
 | `--live` | best, forecast, report, fix | Use live probes before decisions/output. On `fix` this also rebinds an org-sourced account id the backend no longer authorizes and syncs a rebound active account into `~/.codex/auth.json` (see [the workspace note](#codex-multi-auth-workspace)) |

@@ -665,14 +665,23 @@ const CLI_COMMAND_HANDLERS: ReadonlyMap<string, CliCommandHandler> = new Map<
 
 export async function runCodexMultiAuthCli(rawArgs: string[]): Promise<number> {
 	const localeArgs = [...rawArgs];
+	const previousLocaleOverride = process.env.CODEX_MULTI_AUTH_LOCALE;
+	let localeOverrideChanged = false;
+	const restoreLocaleOverride = () => {
+		if (!localeOverrideChanged) return;
+		if (previousLocaleOverride === undefined) delete process.env.CODEX_MULTI_AUTH_LOCALE;
+		else process.env.CODEX_MULTI_AUTH_LOCALE = previousLocaleOverride;
+	};
 	for (let i = 0; i < localeArgs.length; i += 1) {
 		const arg = localeArgs[i];
 		if (arg === "--locale" && localeArgs[i + 1]) {
 			process.env.CODEX_MULTI_AUTH_LOCALE = localeArgs[i + 1];
+			localeOverrideChanged = true;
 			localeArgs.splice(i, 2);
 			i -= 1;
 		} else if (typeof arg === "string" && arg.startsWith("--locale=")) {
 			process.env.CODEX_MULTI_AUTH_LOCALE = arg.slice("--locale=".length);
+			localeOverrideChanged = true;
 			localeArgs.splice(i, 1);
 			i -= 1;
 		}
@@ -692,30 +701,39 @@ export async function runCodexMultiAuthCli(rawArgs: string[]): Promise<number> {
 			? ["auth", ...localeArgs]
 			: [...localeArgs];
 	if (args.length === 0) {
+		restoreLocaleOverride();
 		printUsage();
 		return 0;
 	}
 	if (args[0] === "--help" || args[0] === "-h") {
+		restoreLocaleOverride();
 		printUsage();
 		return 0;
 	}
 
 	const [root, sub, ...rest] = args;
 	if (root !== "auth") {
+		restoreLocaleOverride();
 		printUsage();
 		return 1;
 	}
 
 	const command = sub ?? "login";
 	if (command === "--help" || command === "-h") {
+		restoreLocaleOverride();
 		printUsage();
 		return 0;
 	}
 
 	const handler = CLI_COMMAND_HANDLERS.get(command);
 	if (handler) {
-		return handler(rest);
+		try {
+			return await handler(rest);
+		} finally {
+			restoreLocaleOverride();
+		}
 	}
+	restoreLocaleOverride();
 
 	console.error(`Unknown command: ${command}`);
 	printUsage();
