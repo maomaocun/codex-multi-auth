@@ -1,6 +1,6 @@
 import { closeSync, openSync, readSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
-import { getUsageModelPricing, estimateUsageCostUsd } from "./usage/pricing.js";
+import { estimateUsageCostUsd } from "./usage/pricing.js";
 import { getCodexHomeDir } from "./runtime-paths.js";
 import type { UsageServiceTier, UsageTokenCounts } from "./usage/types.js";
 
