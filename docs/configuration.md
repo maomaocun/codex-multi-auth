@@ -175,7 +175,14 @@ The local dashboard is available with `codex-multi-auth web` (or `codex-ma
 web`). It uses the same account and quota state as `status --json`, updates
 through a server-sent event stream, opens a browser by default, and listens on
 `127.0.0.1:4317`. Use `--no-open` for headless machines. A non-loopback bind
-must include an access token.
+must include an explicit access token; loopback sessions generate a token in
+the printed URL automatically. The account cards can also perform pool
+management actions: add or re-login through device authentication, switch or
+clear the routing pin, pause/resume, drain/undrain, toggle subscription
+auto-prime, edit priority/weight/notes/tags, switch a saved workspace,
+enable/disable/remove accounts, import/download JSON backups, and run a live
+account check. Mutations use the CLI command and storage transaction paths
+and are reflected in the live event stream.
 
 ## Runtime rotation proxy
 

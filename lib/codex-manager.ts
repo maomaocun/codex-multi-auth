@@ -96,6 +96,7 @@ import {
 	type StatusCommandDeps,
 } from "./codex-manager/commands/status.js";
 import { runWebCommand } from "./web-dashboard.js";
+import { createWebAccountActions } from "./web-dashboard-actions.js";
 import { loadPersistedRuntimeObservabilitySnapshot } from "./runtime/runtime-observability.js";
 import { runSwitchCommand } from "./codex-manager/commands/switch.js";
 import { runHistoryCommand } from "./codex-manager/commands/history.js";
@@ -466,7 +467,7 @@ const CLI_COMMAND_HANDLERS: ReadonlyMap<string, CliCommandHandler> = new Map<
 	["login", (rest) => runAuthLogin(rest, { runForecast, createRepairCommandDeps })],
 	["list", runListOrStatusCommand],
 	["status", runListOrStatusCommand],
-	["web", (rest) => runWebCommand(rest, { getStatus: loadStatusJsonSnapshot })],
+	["web", (rest) => runWebCommand(rest, { getStatus: loadStatusJsonSnapshot, actions: createWebAccountActions({ entrypoint: process.argv[1] ?? "" }), locale: resolveOutputLocale(loadPluginConfig().locale) })],
 	[
 		"limits",
 		(rest) =>
