@@ -191,6 +191,7 @@ function resolvePluginConfigPath(): string | null {
  * CODEX_MODE is enabled by default for better Codex CLI parity
  */
 export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
+	locale: "auto",
 	codexMode: true,
 	codexRuntimeRotationProxy: true,
 	codexTuiV2: true,

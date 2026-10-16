@@ -113,6 +113,54 @@ function createRuntimeSnapshot(
 }
 
 describe("runStatusCommand", () => {
+	it("prints a compact actionable summary without account emails", async () => {
+		const logInfo = vi.fn();
+		const deps = createStatusDeps({ compact: true, locale: "zh", logInfo });
+		await runStatusCommand(deps);
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("Codex Multi-Auth 状态");
+		expect(output).toContain("账号");
+		expect(output).toContain("可用");
+		expect(output).not.toContain("one@example.com");
+		expect(output).toContain("--details");
+	});
+
+	it("renders the detailed Chinese view with localized labels and quota bars", async () => {
+		const logInfo = vi.fn();
+		const deps = createStatusDeps({
+			locale: "zh",
+			logInfo,
+			loadAccountPolicies: async () => ({ version: 1, accounts: {} }),
+			loadQuotaCache: async () => ({
+				byEmail: {
+					"one@example.com": {
+						updatedAt: 2_000,
+						status: 200,
+						model: "fixture",
+						planType: "plus",
+						primary: { usedPercent: 97, resetAtMs: 100_000 },
+						secondary: { usedPercent: 15, resetAtMs: 100_000 },
+					},
+				},
+				byAccountId: {},
+			}),
+			loadRuntimeObservabilitySnapshot: async () => createRuntimeSnapshot(),
+		});
+
+		await runStatusCommand(deps);
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("账号");
+		expect(output).toContain("配额：");
+		expect(output).toContain("5小时 [");
+		expect(output).toContain("已用 97% · 剩余 3%");
+		expect(output).toContain("████");
+		expect(output).toContain("预测风险");
+		expect(output).not.toContain("Runtime:");
+		expect(output).not.toContain("quota:");
+		expect(output).not.toContain("forecast risk:");
+		expect(output).not.toContain("Auto-prime");
+	});
+
 	it("separates saved workspace selection from the last outgoing request scope", async () => {
 		const storage = createStorage();
 		storage.accounts[0]!.accountId = "stored-org";
@@ -151,6 +199,20 @@ describe("runStatusCommand", () => {
 		expect(deps.logInfo).toHaveBeenCalledWith("No accounts configured.");
 		expect(deps.logInfo).toHaveBeenCalledWith("Storage: /tmp/codex.json");
 		expect(deps.logInfo).toHaveBeenCalledWith("Storage health: healthy");
+	});
+
+	it("localizes empty detailed status output", async () => {
+		const logInfo = vi.fn();
+		await runStatusCommand(createStatusDeps({
+			locale: "zh",
+			logInfo,
+			loadAccounts: vi.fn(async () => null),
+		}));
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("未配置账号");
+		expect(output).toContain("存储健康：正常");
+		expect(output).not.toContain("No accounts configured");
+		expect(output).not.toContain("Storage health:");
 	});
 
 	it("prints intentional reset state from empty storage metadata", async () => {
@@ -781,7 +843,7 @@ it.each([
    expect(payload.selectionMode).toBe(live ? "model-priority" : "legacy-pin");
    expect(payload.accounts[0].automaticOrder).toBe(live ? 1 : null);
    log.mockClear();
-   expect(await runCodexMultiAuthCli(["status"])).toBe(0);
+   expect(await runCodexMultiAuthCli(["status", "--details"])).toBe(0);
    const output = log.mock.calls.flat().join("\n");
    expect(output).toContain("1970-01-01T00:00:01.000Z");
    expect(output).toContain("streaming");

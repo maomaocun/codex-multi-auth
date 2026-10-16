@@ -5232,6 +5232,44 @@ describe("codex bin wrapper", () => {
 		});
 	}
 
+	it("keeps a native openai rollout visible while routing its resumed requests through rotation", async () => {
+		const fixtureRoot = createWrapperFixture();
+		createRuntimeRotationProxyFixtureModule(fixtureRoot);
+		const fakeBin = createCustomFakeCodexBin(fixtureRoot, [
+			"#!/usr/bin/env node",
+			"const args = process.argv.slice(2);",
+			'if (args[0] === "app-server") process.exit(0);',
+			"console.log(`PROVIDER_OPENAI:${args.includes('model_provider=\\\"openai\\\"')}`);",
+			"console.log(`OPENAI_PROXY_OVERRIDE:${args.some((arg) => arg.includes('openai_base_url='))}`);",
+			"process.exit(0);",
+		]);
+		const originalHome = join(fixtureRoot, "codex-home");
+		const markerPath = join(fixtureRoot, "proxy-marker.txt");
+		const sessionId = "019ddf47-2c01-7c73-9f81-ab0cd9c1d5b7";
+		mkdirSync(join(originalHome, "sessions", "2026", "10", "16"), { recursive: true });
+		writeFileSync(join(originalHome, "config.toml"), 'model_provider = "openai"\n', "utf8");
+		writeFileSync(
+			join(originalHome, "sessions", "2026", "10", "16", `rollout-2026-10-16T00-00-00-${sessionId}.jsonl`),
+			JSON.stringify({ type: "session_meta", payload: { id: sessionId, model_provider: "openai" } }) + "\n",
+			"utf8",
+		);
+
+		const result = runWrapper(fixtureRoot, ["resume", sessionId], {
+			CODEX_MULTI_AUTH_REAL_CODEX_BIN: fakeBin,
+			CODEX_HOME: originalHome,
+			ORIGINAL_CODEX_HOME: originalHome,
+			CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY: "1",
+			CODEX_MULTI_AUTH_APP_ROTATION_IDLE_MS: "200",
+			CODEX_MULTI_AUTH_TEST_PROXY_MARKER: markerPath,
+			OPENAI_API_KEY: undefined,
+		});
+		const output = combinedOutput(result);
+		if (result.status !== 0) throw new Error(output);
+		expect(output).toContain("PROVIDER_OPENAI:true");
+		expect(output).toContain("OPENAI_PROXY_OVERRIDE:true");
+		await waitForFileText(markerPath, "start:http://127.0.0.1:4567\nclose\n");
+	});
+
 	// The rotation helper injects its own options (shim args plus
 	// `-c model_provider=...`) into subcommand argv, and appending those past a
 	// `--` hands them to the subcommand as positionals instead. The separator
@@ -7304,6 +7342,28 @@ describe("codex bin wrapper", () => {
 		expect(output).toContain(
 			"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.",
 		);
+		expect(output).not.toContain("Retrying with");
+	});
+
+	it("keeps interactive resume stdout attached even when capture is forced", () => {
+		const fixtureRoot = createWrapperFixture();
+		const originalHome = join(fixtureRoot, "codex-home");
+		mkdirSync(originalHome, { recursive: true });
+		writeFileSync(join(originalHome, "config.toml"), "", "utf8");
+		const fakeBin = createCustomFakeCodexBin(fixtureRoot, [
+			"console.error(\"The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account.\");",
+			"process.exit(1);",
+		]);
+
+		const result = runWrapper(fixtureRoot, ["resume", "019ddf47-2c01-7c73-9f81-ab0cd9c1d5b7"], {
+			CODEX_MULTI_AUTH_CAPTURE_FORWARD_OUTPUT: "1",
+			CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY: "0",
+			CODEX_MULTI_AUTH_REAL_CODEX_BIN: fakeBin,
+			CODEX_HOME: originalHome,
+		});
+
+		const output = combinedOutput(result);
+		expect(result.status).toBe(1);
 		expect(output).not.toContain("Retrying with");
 	});
 
