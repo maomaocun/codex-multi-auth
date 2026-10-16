@@ -62,6 +62,18 @@ codex-multi-auth forecast --live
 
 Headless or remote shell? Use `codex-multi-auth login --device-auth` — no callback port needed. Blocked browser? See [alternate login paths](docs/getting-started.md#log-in).
 
+The web dashboard is operational, not read-only: it can add or re-login
+accounts with device authentication, run live checks, switch or clear the
+routing pin, pause/drain accounts, change auto-prime/priority/weight, edit
+notes and tags, select a saved workspace, enable/disable/remove accounts, and
+import/download JSON backups. Use a token when binding beyond
+loopback, for example `codex-ma web --host 0.0.0.0 --token <secret>`.
+
+The same page also includes the local Codex usage monitor: token/cache/reasoning
+totals, model and service-tier views, root/child-agent filters, trends, session
+totals, timing data, and CSV export. It incrementally reads `CODEX_HOME/sessions`
+and does not expose raw rollout files.
+
 Run Codex through the wrapper so requests rotate across the pool:
 
 ```bash

@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { spawn } from "node:child_process";
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
+import type { OutputLocale } from "./locale.js";
+import { WebActionError } from "./web-dashboard-actions.js";
 import { renderDashboardHtml } from "./web-dashboard-html.js";
+import type { SessionMonitor } from "./codex-session-monitor.js";
 
 export interface WebStatusSnapshot {
 	[key: string]: unknown;
@@ -12,7 +17,17 @@ export interface WebServerOptions {
 	token?: string | null;
 	refreshMs?: number;
 	getStatus: () => Promise<WebStatusSnapshot>;
+	monitor?: SessionMonitor;
+	locale?: OutputLocale;
+	actions?: WebActionHandlers;
 	openBrowser?: (url: string) => void;
+}
+
+export interface WebActionHandlers {
+	perform: (action: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	startLogin?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+	getOperation?: (operationId: string) => Promise<Record<string, unknown> | null>;
+	dispose?: () => void;
 }
 
 export interface WebServerHandle {
@@ -50,7 +65,12 @@ function authorized(request: IncomingMessage, token: string | null, url: URL): b
 	const bearer = typeof header === "string" && header.startsWith("Bearer ")
 		? header.slice("Bearer ".length).trim()
 		: "";
-	return bearer === token || url.searchParams.get("token") === token;
+	const equal = (value: string) => {
+		const candidate = Buffer.from(value);
+		const expected = Buffer.from(token);
+		return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+	};
+	return equal(bearer) || equal(url.searchParams.get("token") ?? "");
 }
 
 function sendJson(response: ServerResponse, value: unknown, status = 200): void {
@@ -60,6 +80,22 @@ function sendJson(response: ServerResponse, value: unknown, status = 200): void 
 		"x-content-type-options": "nosniff",
 	});
 	response.end(JSON.stringify(value));
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of request) {
+		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+		size += buffer.length;
+		if (size > 4 * 1024 * 1024) throw new WebActionError("body_too_large");
+		chunks.push(buffer);
+	}
+	let parsed: unknown;
+	try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); }
+	catch { throw new WebActionError("invalid_json"); }
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new WebActionError("invalid_json");
+	return parsed as Record<string, unknown>;
 }
 
 function openBrowserDefault(url: string): void {
@@ -73,6 +109,7 @@ function openBrowserDefault(url: string): void {
 			detached: true,
 			stdio: "ignore",
 		});
+		child.on("error", () => undefined);
 		child.unref();
 	} catch {
 		// The server remains usable when no graphical opener is installed.
@@ -89,6 +126,7 @@ function parseArgs(args: string[]): { host: string; port: number; token: string 
 		const arg = args[i] ?? "";
 		const next = () => {
 			const value = args[i + 1];
+			if (!value || value.startsWith("--")) throw new Error("Missing value for " + arg);
 			i += 1;
 			return value;
 		};
@@ -98,8 +136,8 @@ function parseArgs(args: string[]): { host: string; port: number; token: string 
 		else if (arg.startsWith("--port=")) port = parsePort(arg.slice("--port=".length));
 		else if (arg === "--token") token = (next() ?? "").trim() || null;
 		else if (arg.startsWith("--token=")) token = arg.slice("--token=".length).trim() || null;
-		else if (arg === "--interval") refreshMs = Math.max(1000, Number(next() ?? 5000));
-		else if (arg.startsWith("--interval=")) refreshMs = Math.max(1000, Number(arg.slice("--interval=".length)));
+		else if (arg === "--interval") refreshMs = Number(next());
+		else if (arg.startsWith("--interval=")) refreshMs = Number(arg.slice("--interval=".length));
 		else if (arg === "--no-open") noOpen = true;
 		else if (arg === "--help" || arg === "-h") {
 			throw new Error("Usage: codex-multi-auth web [--host 127.0.0.1] [--port 4317] [--token <token>] [--interval <ms>] [--no-open]");
@@ -119,11 +157,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 	const host = options.host?.trim() || "127.0.0.1";
 	const port = options.port ?? 4317;
 	const refreshMs = Math.max(1000, options.refreshMs ?? 5000);
-	const token = options.token?.trim() || null;
-	if (!isLoopbackHost(host) && !token) {
+	if (!isLoopbackHost(host) && !options.token?.trim()) {
 		throw new Error("Binding the web dashboard beyond loopback requires a token.");
 	}
-	let latest: WebStatusSnapshot | null = null;
+	const token = options.token?.trim() || randomBytes(32).toString("hex");
 	let refreshPromise: Promise<WebStatusSnapshot> | null = null;
 	const clients = new Set<ServerResponse>();
 	const refresh = async (): Promise<WebStatusSnapshot> => {
@@ -132,13 +169,15 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 				refreshPromise = null;
 			});
 		}
-		latest = await refreshPromise;
-		return latest;
+		return await refreshPromise;
 	};
 	const broadcast = (snapshot: WebStatusSnapshot) => {
 		const message = "data: " + JSON.stringify(snapshot) + "\n\n";
 		for (const client of clients) {
-			try { client.write(message); } catch { clients.delete(client); }
+			try {
+				if (client.writableLength > 1024 * 1024) { client.end(); clients.delete(client); }
+				else client.write(message);
+			} catch { clients.delete(client); }
 		}
 	};
 	// The request handler intentionally awaits the status read before answering;
@@ -147,19 +186,32 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 	// boundary explicitly for the linter.
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	const server = createServer(async (request, response) => {
-		const requestUrl = new URL(request.url ?? "/", "http://" + (request.headers.host ?? host));
+		response.setHeader("referrer-policy", "no-referrer");
+		response.setHeader("x-frame-options", "DENY");
+		let requestUrl: URL;
+		try { requestUrl = new URL(request.url ?? "/", "http://" + (request.headers.host ?? host)); }
+		catch { sendJson(response, { error: "invalid_request" }, 400); return; }
+		const requestHost = requestUrl.hostname.replace(/^\[|\]$/g, "");
+		if (!(requestHost === host || isLoopbackHost(requestHost) || (["0.0.0.0", "::"].includes(host) && isIP(requestHost)))) {
+			sendJson(response, { error: "invalid_host" }, 403); return;
+		}
+		const origin = request.headers.origin;
+		if (origin && origin !== requestUrl.origin) { sendJson(response, { error: "invalid_origin" }, 403); return; }
 		if (!authorized(request, token, requestUrl)) {
 			unauthorized(response);
 			return;
+		}
+		if (request.method !== "GET" && !(request.method === "POST" && requestUrl.pathname === "/api/actions")) {
+			sendJson(response, { error: "method_not_allowed" }, 405); return;
 		}
 		if (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html") {
 			response.writeHead(200, {
 				"content-type": "text/html; charset=utf-8",
 				"cache-control": "no-store",
 				"x-content-type-options": "nosniff",
-				"content-security-policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+				"content-security-policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
 			});
-			response.end(renderDashboardHtml(token));
+			response.end(renderDashboardHtml(token, options.locale));
 			return;
 		}
 		if (requestUrl.pathname === "/api/health") {
@@ -168,10 +220,68 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		}
 		if (requestUrl.pathname === "/api/status") {
 			try { sendJson(response, await refresh()); }
-			catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 503); }
+			catch { sendJson(response, { error: "status_unavailable" }, 503); }
+			return;
+		}
+		if (requestUrl.pathname === "/api/monitor/health") {
+			sendJson(response, options.monitor?.status() ?? { ready: false, unavailable: true });
+			return;
+		}
+		if (requestUrl.pathname === "/api/monitor/overview" || requestUrl.pathname.startsWith("/api/monitor/sessions/")) {
+			if (!options.monitor) { sendJson(response, { error: "monitor_unavailable" }, 404); return; }
+			try {
+				const sessionId = requestUrl.pathname.startsWith("/api/monitor/sessions/")
+					? decodeURIComponent(requestUrl.pathname.slice("/api/monitor/sessions/".length)) : undefined;
+				const query = Object.fromEntries(requestUrl.searchParams.entries());
+				sendJson(response, options.monitor.report(query, sessionId));
+			} catch (error) {
+				sendJson(response, { error: error instanceof Error && error.message === "session_not_found" ? "session_not_found" : "monitor_unavailable" }, error instanceof Error && error.message === "session_not_found" ? 404 : 503);
+			}
+			return;
+		}
+		if (requestUrl.pathname === "/api/monitor/export.csv") {
+			if (!options.monitor) { sendJson(response, { error: "monitor_unavailable" }, 404); return; }
+			try {
+				const report = options.monitor.report(Object.fromEntries(requestUrl.searchParams.entries())) as { models?: Array<Record<string, unknown>> };
+				const rows = report.models ?? []; const columns = ["key", "responses", "inputTokens", "cachedInputTokens", "outputTokens", "totalTokens", "costUsd"];
+				const csv = [columns.join(","), ...rows.map(row => columns.map(column => JSON.stringify(row[column] ?? "")).join(","))].join("\n") + "\n";
+				response.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": 'attachment; filename="codex-usage.csv"', "cache-control": "no-store" }); response.end("\ufeff" + csv);
+			} catch { sendJson(response, { error: "monitor_unavailable" }, 503); }
+			return;
+		}
+		if (requestUrl.pathname === "/api/actions" && request.method === "POST") {
+			if (!options.actions) { sendJson(response, { error: "Actions are unavailable." }, 404); return; }
+			if (request.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
+				sendJson(response, { error: "json_required" }, 415); return;
+			}
+			try {
+				const body = await readJsonBody(request);
+				const action = typeof body.action === "string" ? body.action : "";
+				if (action === "login") {
+					if (!options.actions.startLogin) { sendJson(response, { error: "Login action is unavailable." }, 503); return; }
+					sendJson(response, await options.actions.startLogin(body), 202);
+					return;
+				}
+				const result = await options.actions.perform(action, body);
+				sendJson(response, result, result.operationId ? 202 : result.ok === false ? 400 : 200);
+				if (!result.operationId) void refresh().then(broadcast).catch(() => undefined);
+			} catch (error) {
+				sendJson(response, { error: error instanceof WebActionError ? error.code : "operation_failed" }, 400);
+			}
+			return;
+		}
+		if (requestUrl.pathname.startsWith("/api/operations/") && request.method === "GET") {
+			if (!options.actions?.getOperation) { sendJson(response, { error: "Operations are unavailable." }, 404); return; }
+			try {
+				const operationId = decodeURIComponent(requestUrl.pathname.slice("/api/operations/".length));
+				const operation = await options.actions.getOperation(operationId);
+				if (!operation) { sendJson(response, { error: "operation_missing" }, 404); return; }
+				sendJson(response, operation);
+			} catch { sendJson(response, { error: "operation_failed" }, 400); }
 			return;
 		}
 		if (requestUrl.pathname === "/events") {
+			if (clients.size >= 20) { sendJson(response, { error: "too_many_connections" }, 429); return; }
 			response.writeHead(200, {
 				"content-type": "text/event-stream; charset=utf-8",
 				"cache-control": "no-cache, no-store",
@@ -186,6 +296,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		}
 		sendJson(response, { error: "Not found" }, 404);
 	});
+	server.requestTimeout = 30_000;
+	server.headersTimeout = 10_000;
 	await new Promise<void>((resolve, reject) => {
 		const onError = (error: Error) => { server.off("listening", onListening); reject(error); };
 		const onListening = () => { server.off("error", onError); resolve(); };
@@ -193,6 +305,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		server.once("listening", onListening);
 		server.listen(port, host);
 	});
+	options.monitor?.start();
 	const address = server.address();
 	const actualPort = typeof address === "object" && address ? address.port : port;
 	const hostForUrl = host.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host;
@@ -206,8 +319,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		token,
 		close: async () => {
 			clearInterval(interval);
+			options.monitor?.stop();
+			options.actions?.dispose?.();
 			for (const client of clients) client.end();
 			clients.clear();
+			server.closeAllConnections();
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		},
 	};
@@ -215,7 +331,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
 export async function runWebCommand(
 	args: string[],
-	deps: { getStatus: () => Promise<WebStatusSnapshot>; logInfo?: (message: string) => void; openBrowser?: (url: string) => void } ,
+	deps: { getStatus: () => Promise<WebStatusSnapshot>; actions?: WebActionHandlers; monitor?: SessionMonitor; locale?: OutputLocale; logInfo?: (message: string) => void; openBrowser?: (url: string) => void },
 ): Promise<number> {
 	if (args.includes("--help") || args.includes("-h")) {
 		(deps.logInfo ?? ((message: string) => process.stdout.write(message + "\n")))("Usage: codex-multi-auth web [--host 127.0.0.1] [--port 4317] [--token <token>] [--interval <ms>] [--no-open]");
@@ -232,6 +348,9 @@ export async function runWebCommand(
 		handle = await startWebServer({
 			...parsed,
 			getStatus: deps.getStatus,
+			actions: deps.actions,
+			monitor: deps.monitor,
+			locale: deps.locale,
 			openBrowser: deps.openBrowser,
 		});
 	} catch (error) {
@@ -239,8 +358,8 @@ export async function runWebCommand(
 		return 1;
 	}
 	const logInfo = deps.logInfo ?? ((message: string) => process.stdout.write(message + "\n"));
-	logInfo("Codex Multi-Auth web dashboard: " + handle.url);
-	logInfo("实时刷新间隔：" + parsed.refreshMs + " ms；按 Ctrl-C 停止。");
+	logInfo((deps.locale === "zh" ? "Codex Multi-Auth 网页：" : "Codex Multi-Auth web dashboard: ") + handle.url);
+	logInfo(deps.locale === "zh" ? "实时刷新间隔：" + parsed.refreshMs + " ms；按 Ctrl-C 停止。" : "Refresh interval: " + parsed.refreshMs + " ms; Ctrl-C to stop.");
 	if (!parsed.noOpen) (deps.openBrowser ?? openBrowserDefault)(handle.url);
 	return await new Promise<number>((resolve) => {
 		let stopped = false;

@@ -590,6 +590,9 @@ export async function runStatusCommand(
 			);
 			return {
 				index: i,
+				accountRef: getAccountPolicyKey(account, i),
+				workspaces: (account.workspaces ?? []).map((workspace, index) => ({ index: index + 1, name: workspace.name ?? null, enabled: workspace.enabled !== false })),
+				currentWorkspaceIndex: (account.currentWorkspaceIndex ?? 0) + 1,
 				subscription: subscriptionStatuses[i],
         resetCreditsAvailable: resetSnapshot(account)?.availableCount ?? null,
         resetCreditsCheckedAt: resetSnapshot(account)?.updatedAt ?? null,
@@ -597,7 +600,12 @@ export async function runStatusCommand(
 				enabled: account.enabled !== false,
 				current: i === activeIndex,
 				priority: accountPolicies.accounts[getAccountPolicyKey(account, i)]?.priority ?? 1,
+				weight: accountPolicies.accounts[getAccountPolicyKey(account, i)]?.weight ?? 1,
+				tags: accountPolicies.accounts[getAccountPolicyKey(account, i)]?.tags ?? [],
+				note: accountPolicies.accounts[getAccountPolicyKey(account, i)]?.note ?? null,
 				autoPrime: accountPolicies.accounts[getAccountPolicyKey(account, i)]?.autoPrime ?? false,
+				paused: accountPolicies.accounts[getAccountPolicyKey(account, i)]?.paused ?? false,
+				drained: accountPolicies.accounts[getAccountPolicyKey(account, i)]?.drained ?? false,
 				markers,
 				selectionPreference: storage.pinnedAccountIndex === i ? "strict-pin" : null,
 				forecastRiskScore: forecastResults[i]?.riskScore ?? null,

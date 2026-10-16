@@ -130,12 +130,6 @@ All governance state is file-backed under `~/.codex/multi-auth`.
 | `--model <model>` | best, forecast, report, fix | Specify model for live probe paths |
 | `--no-runtime-overlay` | forecast | Score from stored account state only; skip the runtime observability overlay |
 
-`codex-multi-auth web` serves the same sanitized status JSON used by
-`status --json` through a local HTTP page and a server-sent event stream. It
-binds to `127.0.0.1` by default and refreshes every five seconds. Binding to a
-non-loopback host requires `--token` or `CODEX_MULTI_AUTH_WEB_TOKEN`; the token
-is checked on the page, JSON, and event-stream routes. `codex-ma web` is an
-equivalent short alias.
 | `--max-accounts <n>` | report | Cap how many accounts a live report walk inspects |
 | `--max-probes <n>` | report | Cap live probes during report |
 | `--cached-only` | report | Prefer cached quota/health data over live probes |
@@ -164,6 +158,46 @@ equivalent short alias.
 
 Default live-probe model when `--model` is omitted is `gpt-5.6-sol`
 (`DEFAULT_PROBE_MODEL`); request routing defaults to `gpt-6.1-sol` (`DEFAULT_MODEL`).
+
+---
+
+## `codex-multi-auth web`
+
+`codex-ma web` is the short alias. The local dashboard shows quota progress,
+reset times, routing, runtime counts, cache age, account search, and filters.
+It reads local state every five seconds; **Check & refresh quota** requests a
+fresh quota snapshot. Chinese/English follows the CLI/system language on first
+open and can be changed in the page.
+
+The page supports device-auth add/re-login with cancellation, switch/unpin,
+enable/disable/remove, pause/resume, drain/undrain, auto-prime, priority,
+weight, notes, tags, workspace selection, and JSON backup import/download.
+Imports merge and deduplicate the pool. Backups include credentials, so their
+download requires explicit confirmation. Account mutations bind to a stable
+identity rather than the displayed row number. Re-login performs one sign-in
+and preserves the current account selection.
+
+The same page includes a Codex usage monitor backed by the local
+`CODEX_HOME/sessions` rollout files. It reports input/output/cache/reasoning
+tokens, request counts, model and service-tier groups, root/child-agent scope,
+daily/hourly trends, session totals, timing fields, and estimated costs using
+the manager's pricing table. The monitor reads incrementally in the background,
+deduplicates replayed response IDs, prefers `token_usage_record`, and keeps
+partial or replaced files recoverable. `GET /api/monitor/health`,
+`/api/monitor/overview`, `/api/monitor/sessions/<id>`, and
+`/api/monitor/export.csv` are protected by the same web token; no raw rollout
+file endpoint is exposed.
+
+The server listens at `127.0.0.1:4317` by default and generates an access token
+in the printed URL. All page, JSON, event-stream, operation, and action routes
+require that token. Binding beyond loopback requires an explicit `--token` or
+`CODEX_MULTI_AUTH_WEB_TOKEN`. Actions require JSON and a same-origin request;
+raw child-process output is never sent to the page. Ctrl-C stops the server
+and cancels its pending login/check children.
+
+For this remote development machine, open the printed URL through an SSH or
+VS Code port forward. The browser cannot access another machine's loopback
+address directly.
 
 ---
 

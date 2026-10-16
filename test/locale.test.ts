@@ -7,6 +7,8 @@ describe("output locale", () => {
 		expect(resolveOutputLocale(undefined, { LANG: "zh_CN.UTF-8" })).toBe("zh");
 		expect(resolveOutputLocale(undefined, { LANG: "en_US.UTF-8" })).toBe("en");
 		expect(resolveOutputLocale("zh", { LANG: "en_US.UTF-8" })).toBe("zh");
+		expect(resolveOutputLocale("zh", { CODEX_MULTI_AUTH_LOCALE: "en" })).toBe("en");
+		expect(resolveOutputLocale("en", { CODEX_MULTI_AUTH_LOCALE: "auto", LANG: "zh_CN.UTF-8" })).toBe("zh");
 	});
 
 	it("reads and persists the locale setting", async () => {
