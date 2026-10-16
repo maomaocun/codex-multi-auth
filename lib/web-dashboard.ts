@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import type { OutputLocale } from "./locale.js";
 import { WebActionError } from "./web-dashboard-actions.js";
 import { renderDashboardHtml } from "./web-dashboard-html.js";
+import type { SessionMonitor } from "./codex-session-monitor.js";
 
 export interface WebStatusSnapshot {
 	[key: string]: unknown;
@@ -16,6 +17,7 @@ export interface WebServerOptions {
 	token?: string | null;
 	refreshMs?: number;
 	getStatus: () => Promise<WebStatusSnapshot>;
+	monitor?: SessionMonitor;
 	locale?: OutputLocale;
 	actions?: WebActionHandlers;
 	openBrowser?: (url: string) => void;
@@ -221,6 +223,32 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 			catch { sendJson(response, { error: "status_unavailable" }, 503); }
 			return;
 		}
+		if (requestUrl.pathname === "/api/monitor/health") {
+			sendJson(response, options.monitor?.status() ?? { ready: false, unavailable: true });
+			return;
+		}
+		if (requestUrl.pathname === "/api/monitor/overview" || requestUrl.pathname.startsWith("/api/monitor/sessions/")) {
+			if (!options.monitor) { sendJson(response, { error: "monitor_unavailable" }, 404); return; }
+			try {
+				const sessionId = requestUrl.pathname.startsWith("/api/monitor/sessions/")
+					? decodeURIComponent(requestUrl.pathname.slice("/api/monitor/sessions/".length)) : undefined;
+				const query = Object.fromEntries(requestUrl.searchParams.entries());
+				sendJson(response, options.monitor.report(query, sessionId));
+			} catch (error) {
+				sendJson(response, { error: error instanceof Error && error.message === "session_not_found" ? "session_not_found" : "monitor_unavailable" }, error instanceof Error && error.message === "session_not_found" ? 404 : 503);
+			}
+			return;
+		}
+		if (requestUrl.pathname === "/api/monitor/export.csv") {
+			if (!options.monitor) { sendJson(response, { error: "monitor_unavailable" }, 404); return; }
+			try {
+				const report = options.monitor.report(Object.fromEntries(requestUrl.searchParams.entries())) as { models?: Array<Record<string, unknown>> };
+				const rows = report.models ?? []; const columns = ["key", "responses", "inputTokens", "cachedInputTokens", "outputTokens", "totalTokens", "costUsd"];
+				const csv = [columns.join(","), ...rows.map(row => columns.map(column => JSON.stringify(row[column] ?? "")).join(","))].join("\n") + "\n";
+				response.writeHead(200, { "content-type": "text/csv; charset=utf-8", "content-disposition": 'attachment; filename="codex-usage.csv"', "cache-control": "no-store" }); response.end("\ufeff" + csv);
+			} catch { sendJson(response, { error: "monitor_unavailable" }, 503); }
+			return;
+		}
 		if (requestUrl.pathname === "/api/actions" && request.method === "POST") {
 			if (!options.actions) { sendJson(response, { error: "Actions are unavailable." }, 404); return; }
 			if (request.headers["content-type"]?.split(";")[0]?.trim() !== "application/json") {
@@ -277,6 +305,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		server.once("listening", onListening);
 		server.listen(port, host);
 	});
+	options.monitor?.start();
 	const address = server.address();
 	const actualPort = typeof address === "object" && address ? address.port : port;
 	const hostForUrl = host.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host;
@@ -290,6 +319,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 		token,
 		close: async () => {
 			clearInterval(interval);
+			options.monitor?.stop();
 			options.actions?.dispose?.();
 			for (const client of clients) client.end();
 			clients.clear();
@@ -301,7 +331,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
 export async function runWebCommand(
 	args: string[],
-	deps: { getStatus: () => Promise<WebStatusSnapshot>; actions?: WebActionHandlers; locale?: OutputLocale; logInfo?: (message: string) => void; openBrowser?: (url: string) => void },
+	deps: { getStatus: () => Promise<WebStatusSnapshot>; actions?: WebActionHandlers; monitor?: SessionMonitor; locale?: OutputLocale; logInfo?: (message: string) => void; openBrowser?: (url: string) => void },
 ): Promise<number> {
 	if (args.includes("--help") || args.includes("-h")) {
 		(deps.logInfo ?? ((message: string) => process.stdout.write(message + "\n")))("Usage: codex-multi-auth web [--host 127.0.0.1] [--port 4317] [--token <token>] [--interval <ms>] [--no-open]");
@@ -319,6 +349,7 @@ export async function runWebCommand(
 			...parsed,
 			getStatus: deps.getStatus,
 			actions: deps.actions,
+			monitor: deps.monitor,
 			locale: deps.locale,
 			openBrowser: deps.openBrowser,
 		});
