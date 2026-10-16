@@ -4,15 +4,18 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
 	copyFileSync,
 	cpSync,
 	existsSync,
 	linkSync,
 	mkdirSync,
 	mkdtempSync,
+	openSync,
 	readdirSync,
 	renameSync,
 	readFileSync,
+	readSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -6124,58 +6127,101 @@ function isCodexInteractiveResumeCommand(rawArgs) {
 // existing native `openai` rollout visible by using the local proxy under the
 // same provider name for this invocation. This only changes the transport
 // endpoint; account selection still happens inside the rotation proxy.
+// `fork` resolves the source session's provider the same way so a forked
+// native rollout keeps `model_provider=openai` instead of being re-labeled.
 function resolveResumeSessionProvider(rawArgs, env = process.env) {
 	const command = findForwardedCommand(rawArgs);
-	if (command?.command !== "resume") return null;
+	if (command?.command !== "resume" && command?.command !== "fork") return null;
 	let requestedId = null;
 	let useLast = false;
+	let showAll = false;
 	for (let index = command.index + 1; index < rawArgs.length; index += 1) {
 		const arg = rawArgs[index];
 		if (arg === "--") break;
 		if (arg === "--last") { useLast = true; continue; }
+		if (arg === "--all") { showAll = true; continue; }
 		if (arg === "--help" || arg === "-h") return null;
 		if (consumesNextArg(arg)) {
 			index += 1;
 			continue;
 		}
 		if (typeof arg === "string" && arg.startsWith("-")) continue;
-		if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(arg)) return null;
+		// With `--last`, a positional token is the prompt (`resume --last "…"`),
+		// not a session id — keep scanning instead of rejecting the lookup.
+		if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(arg)) {
+			if (useLast) continue;
+			return null;
+		}
 		requestedId = arg;
 		break;
 	}
 	if (!requestedId && !useLast) return null;
 	const sessionsRoot = join(resolveCodexHomeDir(env), "sessions");
 	const targetSuffix = requestedId ? `-${requestedId}.jsonl`.toLowerCase() : null;
-	const findRollout = (directory, latest = null) => {
-			let entries;
-			try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return null; }
-			for (const entry of entries) {
-				const path = join(directory, entry.name);
-				if (entry.isDirectory()) {
-					const found = findRollout(path, latest);
-					if (found && (!latest || !latest.path || found.mtimeMs > latest.mtimeMs)) latest = found;
-				} else if (entry.isFile() && (!targetSuffix || entry.name.toLowerCase().endsWith(targetSuffix))) {
-					let mtimeMs = 0;
-					try { mtimeMs = statSync(path).mtimeMs; } catch { /* partial rollout */ }
-					if (!latest || mtimeMs > latest.mtimeMs) latest = { path, mtimeMs };
-				}
+	const currentDirectory = process.cwd();
+	const candidates = [];
+	const collectRollouts = (directory) => {
+		let entries;
+		try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
+		for (const entry of entries) {
+			const path = join(directory, entry.name);
+			if (entry.isDirectory()) {
+				collectRollouts(path);
+			} else if (entry.isFile() && (!targetSuffix || entry.name.toLowerCase().endsWith(targetSuffix))) {
+				let mtimeMs = 0;
+				try { mtimeMs = statSync(path).mtimeMs; } catch { /* partial rollout */ }
+				candidates.push({ path, mtimeMs });
 			}
-			return latest;
-		};
-		const rollout = findRollout(sessionsRoot);
-		if (!rollout) return null;
-		try {
-			for (const line of readFileSync(rollout.path, "utf8").split(/\r?\n/).slice(0, 12)) {
-				if (!line.trim()) continue;
-				const record = JSON.parse(line);
-				if (record?.type === "session_meta" && typeof record.payload?.model_provider === "string") {
-					return record.payload.model_provider;
-				}
-			}
-		} catch {
-			return null;
 		}
+	};
+	collectRollouts(sessionsRoot);
+	candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	// A rollout's provider and cwd live in its first `session_meta` record, so a
+	// bounded header read is enough — loading whole multi-MB transcripts just to
+	// pick a provider would multiply resume's startup cost (#743 review).
+	for (const candidate of candidates) {
+		const meta = readRolloutSessionMeta(candidate.path);
+		if (!meta) continue;
+		// Without `--all`, Codex's `--last` picks the newest session recorded in
+		// the current directory; a newer rollout elsewhere must not win it.
+		if (!requestedId && !showAll && meta.cwd !== currentDirectory) continue;
+		return typeof meta.model_provider === "string" ? meta.model_provider : null;
+	}
+	return null;
+}
+
+function readRolloutSessionMeta(path) {
+	let fd;
+	try {
+		fd = openSync(path, "r");
+		const buffer = Buffer.alloc(64 * 1024);
+		const bytesRead = readSync(fd, buffer, 0, buffer.length, 0);
+		const head = buffer.toString("utf8", 0, bytesRead);
+		for (const line of head.split(/\r?\n/).slice(0, 12)) {
+			if (!line.trim()) continue;
+			let record;
+			try {
+				record = JSON.parse(line);
+			} catch {
+				// The bounded read can cut a line mid-record; earlier records
+				// already parsed still count.
+				break;
+			}
+			if (record?.type === "session_meta" && record.payload && typeof record.payload === "object") {
+				return {
+					model_provider: record.payload.model_provider,
+					cwd: typeof record.payload.cwd === "string" ? record.payload.cwd : null,
+				};
+			}
+		}
+	} catch {
 		return null;
+	} finally {
+		if (fd !== undefined) {
+			try { closeSync(fd); } catch { /* best effort */ }
+		}
+	}
+	return null;
 }
 
 function shouldUseRuntimeRoutingForForwardedArgs(rawArgs) {

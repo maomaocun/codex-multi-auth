@@ -1206,6 +1206,27 @@ describe("codex manager cli commands", () => {
 		expect(errorSpy).toHaveBeenCalledWith("Unknown config command: unknown");
 	});
 
+	it("dispatches the web subcommand to the dashboard handler", async () => {
+		const writeSpy = vi
+			.spyOn(process.stdout, "write")
+			.mockImplementation(() => true);
+		try {
+			const { runCodexMultiAuthCli } = await import(
+				"../lib/codex-manager.js"
+			);
+
+			const exitCode = await runCodexMultiAuthCli(["web", "--help"]);
+
+			expect(exitCode).toBe(0);
+			const output = writeSpy.mock.calls
+				.map((call) => String(call[0]))
+				.join("");
+			expect(output).toContain("Usage: codex-multi-auth web");
+		} finally {
+			writeSpy.mockRestore();
+		}
+	});
+
 	it("prints debug bundle output in json mode", async () => {
 		loadPluginConfigMock.mockReturnValue({
 			codexMode: true,

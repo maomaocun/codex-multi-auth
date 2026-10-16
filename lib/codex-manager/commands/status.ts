@@ -161,17 +161,52 @@ function formatQuotaBar(
 	return `${"█".repeat(filled)}${"░".repeat(Math.max(0, width - filled))}`;
 }
 
+/**
+ * Human label for a quota window length. Derived from the reported
+ * `windowMinutes` (300→"5h"/"5小时", 10080→"7d"/"7天"); falls back to a
+ * neutral primary/secondary label when the duration is unknown.
+ */
+function formatQuotaWindowDuration(
+	windowMinutes: number,
+	locale: OutputLocale,
+): string {
+	const zh = locale === "zh";
+	if (windowMinutes % 1440 === 0) {
+		const days = windowMinutes / 1440;
+		return zh ? `${days}天` : `${days}d`;
+	}
+	if (windowMinutes % 60 === 0) {
+		const hours = windowMinutes / 60;
+		return zh ? `${hours}小时` : `${hours}h`;
+	}
+	return zh ? `${windowMinutes}分钟` : `${windowMinutes}m`;
+}
+
+function formatQuotaWindowLabel(
+	window: QuotaCacheWindow,
+	key: "primary" | "secondary",
+	locale: OutputLocale,
+): string {
+	const minutes = window.windowMinutes;
+	if (typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0) {
+		return formatQuotaWindowDuration(minutes, locale);
+	}
+	return localized(
+		locale,
+		key === "primary" ? "primary" : "secondary",
+		key === "primary" ? "主窗口" : "次窗口",
+	);
+}
+
 function formatQuotaWindow(
 	key: "primary" | "secondary",
-	usedPercent: number,
+	window: QuotaCacheWindow,
 	locale: OutputLocale,
 	width = 20,
 ): string {
-	const used = boundedPercent(usedPercent);
+	const used = boundedPercent(window.usedPercent ?? 0);
 	const left = 100 - used;
-	const label = locale === "zh"
-		? key === "primary" ? "5小时" : "7天"
-		: key === "primary" ? "5h" : "7d";
+	const label = formatQuotaWindowLabel(window, key, locale);
 	if (locale === "zh") {
 		return `${label} [${formatQuotaBar(used, width)}] 已用 ${used}% · 剩余 ${left}%`;
 	}
@@ -180,11 +215,11 @@ function formatQuotaWindow(
 
 function formatQuotaCell(
 	key: "primary" | "secondary",
-	usedPercent: number,
+	window: QuotaCacheWindow,
 	locale: OutputLocale,
 ): string {
-	const used = boundedPercent(usedPercent);
-	const label = key === "primary" ? "5h" : "7d";
+	const used = boundedPercent(window.usedPercent ?? 0);
+	const label = formatQuotaWindowLabel(window, key, locale);
 	return locale === "zh"
 		? `${label} ${formatQuotaBar(used, 8)} ${used}%用/${100 - used}%余`
 		: `${label} ${formatQuotaBar(used, 8)} ${used}%/${100 - used}%`;
@@ -198,7 +233,7 @@ function formatQuotaSummary(
 	return (["primary", "secondary"] as const).flatMap((key) => {
 		const used = quota[key]?.usedPercent;
 		return typeof used === "number" && Number.isFinite(used)
-			? [formatQuotaWindow(key, used, locale, width)]
+			? [formatQuotaWindow(key, quota[key], locale, width)]
 			: [];
 	});
 }
@@ -229,6 +264,17 @@ function translateMarker(marker: string): string {
 		.replace(/^cooldown remaining /, "冷却剩余 ")
 		.replace(/^rate limit resets in /, "限流将在 ")
 		.replace(/^quota resets in /, "配额将在 ");
+}
+
+function translateDisconnectLine(line: string): string {
+	return line
+		.replace(/^Last WebSocket disconnect: /, "上次 WebSocket 断开：")
+		.replace(/; cause=/, "；原因=")
+		.replace(/; stage=/, "；阶段=")
+		.replace(/; closeCode=/, "；关闭码=")
+		.replace(/; route=/, "；路由=")
+		.replace(/; connectionAgeMs=/, "；连接时长(ms)=")
+		.replace(/; events=/, "；事件数=");
 }
 
 function translateReason(reason: string): string {
@@ -375,6 +421,7 @@ export async function runStatusCommand(
 						recommendedIndex: null,
 						recommendationReason: null,
 						runtimeInUseIndex: null,
+						runtime: null,
 						accounts: [],
 					},
 					null,
@@ -537,7 +584,7 @@ export async function runStatusCommand(
 						.map((key) => {
 							const used = quota[key].usedPercent;
 							return typeof used === "number" && Number.isFinite(used)
-								? formatQuotaCell(key, used, locale)
+								? formatQuotaCell(key, quota[key], locale)
 								: null;
 						})
 						.filter(Boolean)
@@ -545,16 +592,49 @@ export async function runStatusCommand(
 				: "?";
 			const last = inferenceTimes[inferenceAccountKey(account)];
 			const activity = typeof last === "number" && last > 0 ? formatWaitTime(Math.max(0, now - last)) : "—";
-			return { index: index + 1, plan, state, quota: quotaText, activity };
+			// Counts derive from the unlocalized marker set, not the rendered
+			// label: matching translated text miscounts states like a raw
+			// "disabled" marker embedded in a joined reason list.
+			const stateKind = disabled
+				? "disabled"
+				: needsLogin
+					? "login"
+					: markers.some((marker) =>
+							isRateLimitedMarker(marker) ||
+							marker === "quota-exhausted" ||
+							marker.startsWith("cooldown:"))
+						? "blocked"
+						: "ready";
+			return { index: index + 1, plan, state, stateKind, quota: quotaText, activity };
 		});
-		const needsLoginCount = compactRows.filter((row) => /login|登录/.test(row.state)).length;
-		const disabledCount = compactRows.filter((row) => /disabled|禁用/.test(row.state)).length;
-		const readyCount = compactRows.length - needsLoginCount - disabledCount;
+		const apiRows = apiAccounts.map((account) => ({
+			index: `${account.kind}${account.index + 1}`,
+			plan: account.label || localized(locale, "API", "API"),
+			state: account.enabled
+				? localized(locale, "enabled", "已启用")
+				: localized(locale, "disabled", "已禁用"),
+			enabled: account.enabled,
+			quota: "—",
+			activity:
+				typeof account.lastInferenceRequestAt === "number" && account.lastInferenceRequestAt > 0
+					? formatWaitTime(Math.max(0, now - account.lastInferenceRequestAt))
+					: "—",
+		}));
+		const needsLoginCount = compactRows.filter((row) => row.stateKind === "login").length;
+		const disabledCount = compactRows.filter((row) => row.stateKind === "disabled").length;
+		const blockedCount = compactRows.filter((row) => row.stateKind === "blocked").length;
+		const readyCount = compactRows.length - needsLoginCount - disabledCount - blockedCount;
 		const route = typeof storage.pinnedAccountIndex === "number"
 			? localized(locale, `pinned to account ${storage.pinnedAccountIndex + 1}`, `固定到账号 ${storage.pinnedAccountIndex + 1}`)
-			: localized(locale, `automatic (active account ${activeIndex + 1})`, `自动轮换（当前账号 ${activeIndex + 1}）`);
+			: activeIndex >= 0
+				? localized(locale, `automatic (active account ${activeIndex + 1})`, `自动轮换（当前账号 ${activeIndex + 1}）`)
+				: localized(locale, "automatic", "自动轮换");
 		logInfo(localized(locale, "Codex Multi-Auth status", "Codex Multi-Auth 状态"));
-		logInfo(`${localized(locale, "Accounts", "账号")}: ${readyCount} ${localized(locale, "ready", "可用")} / ${needsLoginCount} ${localized(locale, "need login", "需登录")} / ${disabledCount} ${localized(locale, "disabled", "已禁用")} (${compactRows.length} ${localized(locale, "total", "总计")})`);
+		logInfo(`${localized(locale, "Accounts", "账号")}: ${readyCount} ${localized(locale, "ready", "可用")} / ${needsLoginCount} ${localized(locale, "need login", "需登录")}${blockedCount > 0 ? ` / ${blockedCount} ${localized(locale, "blocked", "受限")}` : ""} / ${disabledCount} ${localized(locale, "disabled", "已禁用")} (${compactRows.length} ${localized(locale, "total", "总计")})`);
+		if (apiRows.length > 0) {
+			const apiDisabled = apiRows.filter((row) => !row.enabled).length;
+			logInfo(`${localized(locale, "API/ZDR accounts", "API/ZDR 账号")}: ${apiRows.length - apiDisabled} ${localized(locale, "enabled", "已启用")} / ${apiDisabled} ${localized(locale, "disabled", "已禁用")}`);
+		}
 		logInfo(`${localized(locale, "Routing", "路由")}: ${route}; ${localized(locale, "recommended", "推荐")} ${recommendation.recommendedIndex === null ? "—" : `#${recommendation.recommendedIndex + 1}`}`);
 		if (runtimeSnapshot) {
 			const metrics = runtimeSnapshot.runtimeMetrics;
@@ -562,7 +642,7 @@ export async function runStatusCommand(
 		}
 		logInfo("");
 		logInfo(localized(locale, "#  Plan       Quota          State             Last request", "#  套餐       配额            状态              最近请求"));
-		for (const row of compactRows) {
+		for (const row of [...compactRows, ...apiRows]) {
 			logInfo(`${row.index}  ${row.plan.padEnd(10)} ${row.quota.padEnd(14)} ${row.state.padEnd(17)} ${row.activity}`);
 		}
 		if (needsLoginCount > 0) {
@@ -668,6 +748,7 @@ export async function runStatusCommand(
 	// English diagnostic labels leak through when --locale zh is requested.
 	if (locale === "zh") {
 		if (apiConfigurationUnavailable) logInfo("警告：API 配置不可用；仍会显示订阅状态。");
+		if (disconnectLine) logInfo(translateDisconnectLine(disconnectLine));
 		if (deps.loadModelInventory) {
 			for (const line of formatModelInventoryZh(modelInventory ?? null)) logInfo(line);
 		}
@@ -901,7 +982,7 @@ export async function runStatusCommand(
   if (quota) {
    const windows = (["primary", "secondary"] as const).flatMap(key => {
     const used = quota[key].usedPercent;
-    return typeof used === "number" && Number.isFinite(used) ? [paint(formatQuotaWindow(key, used, "en"), used >= 95 ? "danger" : used >= 80 ? "warning" : "success")] : [];
+    return typeof used === "number" && Number.isFinite(used) ? [paint(formatQuotaWindow(key, quota[key], "en"), used >= 95 ? "danger" : used >= 80 ? "warning" : "success")] : [];
    });
    logInfo(`   quota: ${windows.join("; ")} (${paint(`cached quota ${formatWaitTime(Math.max(0, now-quota.updatedAt))} ago`, "muted")})`);
   } else logInfo(paint("   quota unknown; run check (risk uses other known signals only)", "warning"));

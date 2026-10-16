@@ -63,6 +63,8 @@ describe("device auth flow", () => {
 		const previousHttpsProxy = process.env.HTTPS_PROXY;
 		const previousLowerHttpProxy = process.env.http_proxy;
 		const previousLowerHttpsProxy = process.env.https_proxy;
+		const previousNoProxy = process.env.NO_PROXY;
+		const previousLowerNoProxy = process.env.no_proxy;
 		const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
 			jsonResponse({
 				device_auth_id: "device-auth-proxy",
@@ -75,6 +77,8 @@ describe("device auth flow", () => {
 		process.env.HTTPS_PROXY = "http://proxy.example:8080";
 		process.env.http_proxy = "http://proxy.example:8080";
 		process.env.https_proxy = "http://proxy.example:8080";
+		delete process.env.NO_PROXY;
+		delete process.env.no_proxy;
 		vi.stubGlobal("fetch", fetchMock);
 		try {
 			const result = await requestDeviceAuthorization();
@@ -93,6 +97,10 @@ describe("device auth flow", () => {
 			else process.env.http_proxy = previousLowerHttpProxy;
 			if (previousLowerHttpsProxy === undefined) delete process.env.https_proxy;
 			else process.env.https_proxy = previousLowerHttpsProxy;
+			if (previousNoProxy === undefined) delete process.env.NO_PROXY;
+			else process.env.NO_PROXY = previousNoProxy;
+			if (previousLowerNoProxy === undefined) delete process.env.no_proxy;
+			else process.env.no_proxy = previousLowerNoProxy;
 			await closeSharedProxyDispatchers();
 		}
 	});

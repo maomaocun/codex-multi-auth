@@ -1849,7 +1849,7 @@ function normalizeConfigExplainValue(value: unknown): unknown {
 }
 
 const CONFIG_EXPLAIN_ENTRIES: ConfigExplainMeta[] = [
-	{ key: "locale", envNames: ["CODEX_MULTI_AUTH_LOCALE"], getValue: config => normalizeOutputLocaleSetting(process.env.CODEX_MULTI_AUTH_LOCALE ?? config.locale ?? "auto") ?? "auto" },
+	{ key: "locale", envNames: ["CODEX_MULTI_AUTH_LOCALE"], getValue: config => normalizeOutputLocaleSetting(process.env.CODEX_MULTI_AUTH_LOCALE?.trim() || config.locale || "auto") ?? "auto" },
 	{ key: "codexMode", envNames: ["CODEX_MODE"], getValue: getCodexMode },
 	{
 		key: "codexRuntimeRotationProxy",

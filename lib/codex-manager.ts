@@ -466,7 +466,10 @@ const CLI_COMMAND_HANDLERS: ReadonlyMap<string, CliCommandHandler> = new Map<
 	["login", (rest) => runAuthLogin(rest, { runForecast, createRepairCommandDeps })],
 	["list", runListOrStatusCommand],
 	["status", runListOrStatusCommand],
-	["web", (rest) => runWebCommand(rest, { getStatus: loadStatusJsonSnapshot })],
+	["web", (rest) => runWebCommand(rest, {
+		getStatus: loadStatusJsonSnapshot,
+		locale: resolveOutputLocale(loadPluginConfig().locale),
+	})],
 	[
 		"limits",
 		(rest) =>

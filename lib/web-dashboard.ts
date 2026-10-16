@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { spawn } from "node:child_process";
 import { renderDashboardHtml } from "./web-dashboard-html.js";
+import { localized, resolveOutputLocale, type OutputLocale } from "./locale.js";
 
 export interface WebStatusSnapshot {
 	[key: string]: unknown;
@@ -13,6 +14,9 @@ export interface WebServerOptions {
 	refreshMs?: number;
 	getStatus: () => Promise<WebStatusSnapshot>;
 	openBrowser?: (url: string) => void;
+	locale?: OutputLocale;
+	/** Called when an SSE client is dropped for falling behind on broadcasts. */
+	onSseClientDrop?: (client: ServerResponse) => void;
 }
 
 export interface WebServerHandle {
@@ -53,6 +57,24 @@ function authorized(request: IncomingMessage, token: string | null, url: URL): b
 	return bearer === token || url.searchParams.get("token") === token;
 }
 
+/**
+ * Reject requests addressed to a foreign Host. A loopback listener without a
+ * token is otherwise reachable via DNS rebinding: a hostile page resolving its
+ * own domain to 127.0.0.1 would read the pool status as same-origin. Token-gated
+ * binds skip the check — the bearer token is already the guard there.
+ */
+function requestHostAllowed(request: IncomingMessage, host: string, token: string | null): boolean {
+	if (token) return true;
+	const bound = host.trim().toLowerCase().replace(/^\[|\]$/g, "");
+	if (!isLoopbackHost(bound)) return true;
+	const hostHeader = request.headers.host;
+	if (typeof hostHeader !== "string" || !hostHeader.trim()) return true;
+	let hostname = hostHeader.trim();
+	const bracketed = hostname.match(/^\[(.*)\](?::\d+)?$/);
+	hostname = (bracketed ? bracketed[1] ?? "" : hostname.replace(/:\d+$/, "")).toLowerCase();
+	return isLoopbackHost(hostname);
+}
+
 function sendJson(response: ServerResponse, value: unknown, status = 200): void {
 	response.writeHead(status, {
 		"content-type": "application/json; charset=utf-8",
@@ -73,6 +95,10 @@ function openBrowserDefault(url: string): void {
 			detached: true,
 			stdio: "ignore",
 		});
+		// A missing opener (e.g. no xdg-open on a headless box) fails
+		// asynchronously: without a listener the process-level default would
+		// tear down the already-running dashboard.
+		child.on("error", () => undefined);
 		child.unref();
 	} catch {
 		// The server remains usable when no graphical opener is installed.
@@ -138,7 +164,16 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 	const broadcast = (snapshot: WebStatusSnapshot) => {
 		const message = "data: " + JSON.stringify(snapshot) + "\n\n";
 		for (const client of clients) {
-			try { client.write(message); } catch { clients.delete(client); }
+			try {
+				if (client.write(message)) continue;
+				// A client that stopped reading would otherwise accumulate one full
+				// snapshot per refresh forever. end() would stall behind its own
+				// unsent queue, so hard-close the connection instead.
+				clients.delete(client);
+				client.destroy();
+				client.socket?.destroy();
+				options.onSseClientDrop?.(client);
+			} catch { clients.delete(client); }
 		}
 	};
 	// The request handler intentionally awaits the status read before answering;
@@ -147,44 +182,62 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 	// boundary explicitly for the linter.
 	// eslint-disable-next-line @typescript-eslint/no-misused-promises
 	const server = createServer(async (request, response) => {
-		const requestUrl = new URL(request.url ?? "/", "http://" + (request.headers.host ?? host));
-		if (!authorized(request, token, requestUrl)) {
-			unauthorized(response);
-			return;
+		try {
+			if (!requestHostAllowed(request, host, token)) {
+				sendJson(response, { error: "Host header not allowed" }, 403);
+				return;
+			}
+			let requestUrl: URL;
+			try {
+				requestUrl = new URL(request.url ?? "/", "http://" + (request.headers.host ?? host));
+			} catch {
+				sendJson(response, { error: "Malformed request" }, 400);
+				return;
+			}
+			if (!authorized(request, token, requestUrl)) {
+				unauthorized(response);
+				return;
+			}
+			if (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html") {
+				response.writeHead(200, {
+					"content-type": "text/html; charset=utf-8",
+					"cache-control": "no-store",
+					"x-content-type-options": "nosniff",
+					"content-security-policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+				});
+				response.end(renderDashboardHtml(token, options.locale));
+				return;
+			}
+			if (requestUrl.pathname === "/api/health") {
+				sendJson(response, { ok: true, service: "codex-multi-auth-web" });
+				return;
+			}
+			if (requestUrl.pathname === "/api/status") {
+				try { sendJson(response, await refresh()); }
+				catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 503); }
+				return;
+			}
+			if (requestUrl.pathname === "/events") {
+				// Cleanup must register before the awaited refresh: a disconnect
+				// during that read would otherwise leave the response registered
+				// until server shutdown.
+				response.on("close", () => clients.delete(response));
+				response.writeHead(200, {
+					"content-type": "text/event-stream; charset=utf-8",
+					"cache-control": "no-cache, no-store",
+					connection: "keep-alive",
+					"x-accel-buffering": "no",
+				});
+				response.write("retry: " + refreshMs + "\n\n");
+				clients.add(response);
+				try { response.write("data: " + JSON.stringify(await refresh()) + "\n\n"); } catch { response.end(); }
+				return;
+			}
+			sendJson(response, { error: "Not found" }, 404);
+		} catch {
+			try { sendJson(response, { error: "Internal error" }, 500); }
+			catch { response.destroy(); }
 		}
-		if (requestUrl.pathname === "/" || requestUrl.pathname === "/index.html") {
-			response.writeHead(200, {
-				"content-type": "text/html; charset=utf-8",
-				"cache-control": "no-store",
-				"x-content-type-options": "nosniff",
-				"content-security-policy": "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
-			});
-			response.end(renderDashboardHtml(token));
-			return;
-		}
-		if (requestUrl.pathname === "/api/health") {
-			sendJson(response, { ok: true, service: "codex-multi-auth-web" });
-			return;
-		}
-		if (requestUrl.pathname === "/api/status") {
-			try { sendJson(response, await refresh()); }
-			catch (error) { sendJson(response, { error: error instanceof Error ? error.message : String(error) }, 503); }
-			return;
-		}
-		if (requestUrl.pathname === "/events") {
-			response.writeHead(200, {
-				"content-type": "text/event-stream; charset=utf-8",
-				"cache-control": "no-cache, no-store",
-				connection: "keep-alive",
-				"x-accel-buffering": "no",
-			});
-			response.write("retry: " + refreshMs + "\n\n");
-			clients.add(response);
-			try { response.write("data: " + JSON.stringify(await refresh()) + "\n\n"); } catch { response.end(); clients.delete(response); }
-			request.on("close", () => clients.delete(response));
-			return;
-		}
-		sendJson(response, { error: "Not found" }, 404);
 	});
 	await new Promise<void>((resolve, reject) => {
 		const onError = (error: Error) => { server.off("listening", onListening); reject(error); };
@@ -215,7 +268,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
 export async function runWebCommand(
 	args: string[],
-	deps: { getStatus: () => Promise<WebStatusSnapshot>; logInfo?: (message: string) => void; openBrowser?: (url: string) => void } ,
+	deps: { getStatus: () => Promise<WebStatusSnapshot>; logInfo?: (message: string) => void; openBrowser?: (url: string) => void; locale?: OutputLocale } ,
 ): Promise<number> {
 	if (args.includes("--help") || args.includes("-h")) {
 		(deps.logInfo ?? ((message: string) => process.stdout.write(message + "\n")))("Usage: codex-multi-auth web [--host 127.0.0.1] [--port 4317] [--token <token>] [--interval <ms>] [--no-open]");
@@ -227,20 +280,22 @@ export async function runWebCommand(
 		(deps.logInfo ?? ((message: string) => process.stderr.write(message + "\n")))(error instanceof Error ? error.message : String(error));
 		return 1;
 	}
+	const logInfo = deps.logInfo ?? ((message: string) => process.stdout.write(message + "\n"));
+	const locale = deps.locale ?? resolveOutputLocale();
 	let handle: WebServerHandle;
 	try {
 		handle = await startWebServer({
 			...parsed,
 			getStatus: deps.getStatus,
 			openBrowser: deps.openBrowser,
+			locale,
 		});
 	} catch (error) {
 		(deps.logInfo ?? ((message: string) => process.stderr.write(message + "\n")))(error instanceof Error ? error.message : String(error));
 		return 1;
 	}
-	const logInfo = deps.logInfo ?? ((message: string) => process.stdout.write(message + "\n"));
 	logInfo("Codex Multi-Auth web dashboard: " + handle.url);
-	logInfo("实时刷新间隔：" + parsed.refreshMs + " ms；按 Ctrl-C 停止。");
+	logInfo(localized(locale, `Live refresh every ${parsed.refreshMs} ms; press Ctrl-C to stop.`, `实时刷新间隔：${parsed.refreshMs} ms；按 Ctrl-C 停止。`));
 	if (!parsed.noOpen) (deps.openBrowser ?? openBrowserDefault)(handle.url);
 	return await new Promise<number>((resolve) => {
 		let stopped = false;

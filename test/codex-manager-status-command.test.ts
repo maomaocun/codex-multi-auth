@@ -125,6 +125,127 @@ describe("runStatusCommand", () => {
 		expect(output).toContain("--details");
 	});
 
+	it("lists API/ZDR accounts in compact view instead of hiding them", async () => {
+		const logInfo = vi.fn();
+		const deps = createStatusDeps({
+			compact: true,
+			locale: "en",
+			logInfo,
+			loadApiRoutes: async () => [
+				{ id: "route-1", kind: "api" as const, label: "Team API", enabled: true, priority: 1, visibleModels: ["gpt-5"], apiKey: "sk-hidden" },
+				{ id: "route-2", kind: "zdr" as const, label: "ZDR pool", enabled: false, priority: 2, visibleModels: [], apiKey: "sk-hidden-2" },
+			],
+		});
+		await runStatusCommand(deps);
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("API/ZDR accounts");
+		expect(output).toContain("Team API");
+		expect(output).toContain("ZDR pool");
+		expect(output).toContain("1 enabled / 1 disabled");
+		expect(output).not.toContain("sk-hidden");
+	});
+
+	it("counts blocked accounts separately from ready in compact view", async () => {
+		const logInfo = vi.fn();
+		const deps = createStatusDeps({
+			compact: true,
+			locale: "en",
+			logInfo,
+			loadQuotaCache: async () => ({
+				byEmail: {
+					"one@example.com": {
+						updatedAt: 2_000,
+						status: 200,
+						model: "fixture",
+						planType: "plus",
+						primary: { usedPercent: 100, resetAtMs: 500_000, windowMinutes: 300 },
+						secondary: { usedPercent: 20, resetAtMs: 500_000, windowMinutes: 10_080 },
+					},
+				},
+				byAccountId: {},
+			}),
+		});
+		await runStatusCommand(deps);
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("blocked");
+		expect(output).not.toContain("2 ready");
+	});
+
+	it("derives compact quota labels from windowMinutes instead of fixed 5h/7d", async () => {
+		const logInfo = vi.fn();
+		const deps = createStatusDeps({
+			compact: true,
+			locale: "en",
+			logInfo,
+			loadQuotaCache: async () => ({
+				byEmail: {
+					"one@example.com": {
+						updatedAt: 2_000,
+						status: 200,
+						model: "fixture",
+						planType: "plus",
+						primary: { usedPercent: 40, resetAtMs: 500_000, windowMinutes: 60 },
+						secondary: { usedPercent: 10, resetAtMs: 500_000, windowMinutes: 2_880 },
+					},
+				},
+				byAccountId: {},
+			}),
+		});
+		await runStatusCommand(deps);
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("1h");
+		expect(output).toContain("2d");
+		expect(output).not.toContain("5h");
+		expect(output).not.toContain("7d");
+	});
+
+	it("includes runtime:null in the zero-account JSON shape", async () => {
+		const logInfo = vi.fn();
+		await runStatusCommand(createStatusDeps({
+			json: true,
+			logInfo,
+			loadAccounts: vi.fn(async () => null),
+		}));
+		const parsed = JSON.parse(logInfo.mock.calls.flat().join(""));
+		expect(parsed.runtime).toBeNull();
+		expect(parsed.accounts).toEqual([]);
+		expect(parsed.lastWebsocketDisconnect).toBeNull();
+	});
+
+	it("renders the Chinese detailed disconnect line localized", async () => {
+		const logInfo = vi.fn();
+		await runStatusCommand(createStatusDeps({
+			locale: "zh",
+			logInfo,
+			loadAppBindStatus: async () => ({
+				state: null,
+				pid: null,
+				baseUrl: null,
+				totalRequests: null,
+				lastAccountIndex: null,
+				lastAccountLabel: null,
+				lastAccountEmail: null,
+				lastAccountId: null,
+				updatedAt: null,
+				lastError: null,
+				nativeOpenai: false,
+				lastWebsocketDisconnect: {
+					at: 1_900,
+					cause: "transport_error",
+					stage: "awaiting_first_event",
+					closeCode: 1006,
+					routeKind: "oauth",
+					connectionAgeMs: 5_000,
+					eventCount: 2,
+				},
+			}),
+		}));
+		const output = logInfo.mock.calls.flat().join("\n");
+		expect(output).toContain("上次 WebSocket 断开");
+		expect(output).toContain("；原因=transport_error");
+		expect(output).not.toContain("Last WebSocket disconnect");
+	});
+
 	it("renders the detailed Chinese view with localized labels and quota bars", async () => {
 		const logInfo = vi.fn();
 		const deps = createStatusDeps({
@@ -138,8 +259,8 @@ describe("runStatusCommand", () => {
 						status: 200,
 						model: "fixture",
 						planType: "plus",
-						primary: { usedPercent: 97, resetAtMs: 100_000 },
-						secondary: { usedPercent: 15, resetAtMs: 100_000 },
+						primary: { usedPercent: 97, resetAtMs: 100_000, windowMinutes: 300 },
+						secondary: { usedPercent: 15, resetAtMs: 100_000, windowMinutes: 10_080 },
 					},
 				},
 				byAccountId: {},
