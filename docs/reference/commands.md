@@ -177,6 +177,17 @@ download requires explicit confirmation. Account mutations bind to a stable
 identity rather than the displayed row number. Re-login performs one sign-in
 and preserves the current account selection.
 
+The same page includes a Codex usage monitor backed by the local
+`CODEX_HOME/sessions` rollout files. It reports input/output/cache/reasoning
+tokens, request counts, model and service-tier groups, root/child-agent scope,
+daily/hourly trends, session totals, timing fields, and estimated costs using
+the manager's pricing table. The monitor reads incrementally in the background,
+deduplicates replayed response IDs, prefers `token_usage_record`, and keeps
+partial or replaced files recoverable. `GET /api/monitor/health`,
+`/api/monitor/overview`, `/api/monitor/sessions/<id>`, and
+`/api/monitor/export.csv` are protected by the same web token; no raw rollout
+file endpoint is exposed.
+
 The server listens at `127.0.0.1:4317` by default and generates an access token
 in the printed URL. All page, JSON, event-stream, operation, and action routes
 require that token. Binding beyond loopback requires an explicit `--token` or

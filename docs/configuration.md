@@ -184,6 +184,13 @@ enable/disable/remove accounts, import/download JSON backups, and run a live
 account check. Mutations use the CLI command and storage transaction paths
 and are reflected in the live event stream.
 
+The dashboard's usage monitor reads `CODEX_HOME/sessions` locally. It is
+incremental and bounded, so initial indexing can report `scanning` while the
+account pool remains usable. It never uploads raw session files. Token counts
+follow the event timestamp, replayed response IDs are counted once, and cost
+estimates use the existing manager pricing table; unknown model/tier prices
+remain unpriced rather than being guessed.
+
 ## Runtime rotation proxy
 
 `codexRuntimeRotationProxy` is enabled by default. When enabled through defaults, settings, `codex-multi-auth rotation enable`, or `CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY=1`, the `codex-multi-auth-codex` wrapper starts a localhost-only Responses proxy for forwarded official Codex sessions, including CLI request commands, `codex app-server`, and `codex app` launches through the wrapper. For non-interactive request commands and `codex app`, the wrapper writes a temporary shadow `CODEX_HOME/config.toml` that selects a custom provider named `codex-multi-auth-runtime-proxy`, launches the official Codex surface against that provider, and removes the shadow home after the owning process exits. Interactive TUI sessions (with or without the optional initial prompt), `resume`/`fork`, and `codex app-server` instead stay on the canonical `CODEX_HOME` and receive the same provider through `-c` overrides, which avoids reindexing session history on every launch and leaves the real `config.toml` untouched. Set `codexRuntimeRotationProxy=false`, run `codex-multi-auth rotation disable`, or set `CODEX_MULTI_AUTH_RUNTIME_ROTATION_PROXY=0` to bypass the proxy.
